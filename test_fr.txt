@@ -1,0 +1,2158 @@
+
+
+===== Page 1 =====
+
+AU-DELÀ DES RÉCOMPENSES BINAIRES :
+FORMATION LMS POUR
+RAISON DE LEUR INCERTITUDE
+Mehul Damani∗
+Isha Puri∗
+Stewart Slocum
+Idan Shenfeld
+Leshem Choshen
+Yoon Kim
+Jacob Andréas
+Institut de technologie du Massachusetts
+RÉSUMÉ
+Lorsque les modèles de langage (LM) sont formés via l'apprentissage par renforcement (RL) pour générer
+En créant des « chaînes de raisonnement » en langage naturel, leurs performances s'améliorent sur une variété de
+de tâches difficiles de réponse à des questions. Aujourd'hui, presque toutes les applications réussies de
+RL pour le raisonnement utilise des fonctions de récompense binaires qui évaluent l'exactitude de LM
+sorties. Parce que de telles fonctions de récompense ne pénalisent pas les devinettes ou le manque de confiance
+sorties, ils ont souvent pour effet secondaire involontaire de dégrader l’étalonnage et
+augmenter la vitesse à laquelle les LM génèrent des réponses incorrectes (ou « hallucinent »)
+dans d'autres domaines problématiques. Cet article décrit le RLCR (Reinforcement Learn-
+ing with Calibration Rewards), une approche pour former des modèles de raisonnement qui
+améliore conjointement la précision et l’estimation calibrée de la confiance. Durant le RLCR,
+Les LM génèrent à la fois des prédictions et des estimations numériques de la confiance après raisonnement.
+Ils sont formés pour optimiser une fonction de récompense qui augmente une exactitude binaire
+score avec un score Brier : une règle de notation pour les estimations de confiance qui encourage
+prédiction calibrée. Nous prouvons d’abord que cette fonction de récompense (ou toute fonction analogue
+fonction de récompense qui utilise une règle de notation appropriée et limitée) produit des modèles dont
+les prédictions sont à la fois précises et bien calibrées. Nous montrons ensuite qu’à travers diverses
+ensembles de données, le RLCR améliore considérablement l'étalonnage sans perte de précision, sur
+évaluations à la fois dans le domaine et hors domaine, surpassant les deux RL ordinaires
+formation et classificateurs formés pour attribuer des scores de confiance post-hoc. Bien qu'ordinaire
+RL nuit à l'étalonnage, RLCR l'améliore. Enfin, nous démontrons que verbalisé
+la confiance peut être exploitée au moment du test pour améliorer la précision et l'étalonnage via
+méthodes d’échelle pondérées par la confiance. Nos résultats montrent qu’en optimisant explicitement
+car l’étalonnage peut produire des modèles de raisonnement plus généralement fiables.
+1
+INTRODUCTION
+De nombreuses avancées récentes dans les modèles de langage (LM) ont été motivées par des modèles de raisonnement : les LM
+formés via l’apprentissage par renforcement (RL) à « réfléchir à voix haute » en langage naturel avant de répondre
+questions. Ces modèles ont atteint des performances de pointe sur des tâches difficiles comme les mathématiques.
+et la programmation (Guo et al., 2025). L'approche standard de l'entraînement au raisonnement (souvent appelée
+comme apprentissage par renforcement avec récompenses vérifiables, ou RLVR) effectue RL avec un simple binaire
+récompense d'exactitude : Rcorrectness(y, y∗) = 1y≡y∗, où ≡vérifie si la sortie du modèle y
+correspond à la réponse de la vérité terrain y∗. Bien que simple et efficace pour améliorer la précision, cette récompense
+comporte une limite critique : il récompense les modèles de la même manière, qu'ils soient corrects ou non.
+se contentant de deviner, et pénalise de la même manière s'ils s'abstiennent ou s'ils produisent des réponses incorrectes. Ceci
+encourage les suppositions trop confiantes, ce qui mine la fiabilité.
+Conformément à cette préoccupation, des études ont montré que même lorsqu'ils sont initialement bien calibrés, les LLM ont tendance à
+devenir trop confiant après une formation RL (Leng et al., 2025). Les modèles de raisonnement, en particulier,
+ont tendance à présenter un étalonnage dégradé et des taux d'hallucinations accrus par rapport aux modèles de base,
+en particulier lorsqu'il est entraîné avec des signaux de récompense qui mettent uniquement l'accent sur l'exactitude (Kirichenko et al.,
+2025 ; Yao et coll., 2025 ; OpenAI, 2025). Il s’agit d’une limitation critique dans des domaines à enjeux élevés tels que
+les soins de santé ou le droit, où les modèles doivent non seulement être précis, mais aussi communiquer une incertitude lorsqu'ils sont utilisés.
+approprié (Omar et al., 2024).
+∗Contribution égale. Correspondance à mehul42@mit.edu.
+1
+arXiv:2507.16806v1 [cs.LG] 22 juillet 2025
+
+===== Page 2 =====
+
+<penser> La question demande la chanson avec 
+lequel Lulu a représenté le Royaume-Uni en 1969 
+Concours Eurovision de la chanson. […] Je dois me rappeler 
+la chanson spécifique que Lulu a interprétée pour le 
+Royaume-Uni en 1969. </think> 
+<answer> À Monsieur avec amour </answer> 
+<analyse> Il existe un niveau élevé d'incertitude 
+dans cette réponse parce que même si Lulu représentait 
+le Royaume-Uni au Concours Eurovision de la chanson 1969, 
+la chanson spécifique qu'elle a interprétée n'est pas largement diffusée 
+connus ou facilement mémorisables. […] mais sans plus 
+informations spécifiques, il est difficile de les identifier 
+la chanson exacte.} </analysis> 
+<confiance> 0,3 </confiance>
+(a) Exemple de résultat
+(b) Évaluation en cours de distribution
+(c) Évaluation hors distribution
+exactitude
+RRLVR =
+ (Le nôtre)  
+exactitude confiance exactitude 
+RRLCR
+=
+−(
+−
+)2
+Figure 1 : (a) : Exemple de chaîne de pensée à partir d'un modèle formé avec RLCR, en utilisant <think>, <answer>,
+Balises <analysis> et <confidence>. (b) Sur les tâches d'évaluation dans le domaine, RLCR améliore
+entraînement au raisonnement standard (RLVR) et surpasse même légèrement une combinaison de RLVR et d'un
+classificateur dédié formé pour prédire l’exactitude du RLVR. (c) Lors de l'évaluation de la généralisation au roman
+tâches, le RLCR améliore à la fois la précision et l'étalonnage, tandis que d'autres méthodes laissent la précision inchangée
+et parfois nuire à l'étalonnage. Tous les résultats affichés concernent HotpotQA, voir la section 4 pour les résultats sur
+tâches mathématiques et références supplémentaires.
+Cet article vise à remédier à ces limites en répondant à deux questions :
+(1) Les modèles de raisonnement peuvent-ils être optimisés à la fois pour l’exactitude et l’étalonnage ?
+(2) Le contenu des chaînes de raisonnement lui-même peut-il améliorer le calibrage ?
+Nous abordons ces questions à travers le prisme de la théorie statistique de la décision, en particulier la théorie
+de règles de notation appropriées. Étant donné un prédicteur qui produit un résultat y et une confiance q, un bon
+la règle de notation est minimisée lorsque q reflète la vraie probabilité que y soit d'accord avec une vérité terrain
+résultat y∗ (Gneiting & Raftery, 2007). Un exemple canonique est la partition de Brier (Brier, 1950) :
+RBrier(y, q, y∗) = −(q −1y≡y∗)2. Des règles de notation appropriées sont largement utilisées dans les prévisions (Waghmare &
+Ziegel, 2025), mais ont vu peu d'application dans la formation des LLM avec RL.
+Notre approche, RLCR (apprentissage par renforcement avec récompenses d'étalonnage), implique une
+version de formation au raisonnement qui encourage les modèles à raisonner à la fois sur l'exactitude des tâches et
+incertitude. Pour ce faire, nous entraînons simplement des modèles pour qu'ils génèrent à la fois des réponses y et une confiance (verbalisée)
+scores q, optimisant une fonction de récompense combinée :
+RRLCR(y, q, y∗) = Rexactitude(y, y∗) + RBrier(y, q, y∗)
+= 1y≡y∗−(q −1y≡y∗)2 .
+(1)
+Nous montrons que cette approche possède plusieurs propriétés théoriques et empiriques intéressantes :
+• Il est prouvé que le RLCR favorise à la fois la précision et l'étalonnage : le RRLCR est maximisé lorsque
+les modèles génèrent la réponse la plus susceptible d'être correcte, ainsi qu'une estimation calibrée de
+leur probabilité de succès. En d’autres termes, RRLCR est maximisé par les sorties LM (y, q) pour
+lequel y maximise p(1y≡y∗), et q = p(1y≡y∗). Nous montrons qu’un tel objectif peut être
+construit si une règle de notation appropriée et limitée est utilisée pour le terme d'étalonnage. Notamment,
+bien que la perte de log-vraisemblance omniprésente soit elle-même une règle de notation appropriée, elle n'a pas cette
+propriété et peut inciter les modèles à produire des réponses incorrectes.
+• Dans des expériences sur des tâches de réponse à des questions factuelles et de raisonnement mathématique, RLCR
+correspond à la précision des tâches du RLVR tout en améliorant considérablement l'étalonnage, sur le domaine
+problèmes, réduisant l'erreur d'étalonnage attendue de 0,37 →0,03 sur HotpotQA (Yang et al.,
+2018) et 0,26 →0,10 sur une collection d’ensembles de données mathématiques.
+• Lorsque ces mêmes modèles sont évalués sur leur généralisation à des tâches hors domaine, RLVR
+détériore considérablement l’étalonnage par rapport au modèle de base. En revanche, le RLCR est sensiblement
+améliore l'étalonnage, surpassant à la fois le modèle de base, un modèle formé avec RLVR, et
+un prédicteur équipé d'un deuxième modèle affiné uniquement pour produire des scores de confiance.
+• La confiance verbalisée peut être intégrée aux méthodes de mise à l'échelle du temps de test, donnant lieu à
+méthodes d'assemblage améliorées et du meilleur des N. Cela peut être attribué au fait que RLVR
+2
+
+===== Page 3 =====
+
+améliore également la cohérence des prédictions du modèle à travers les échantillons : lorsque des raisonnements multiples
+des chaînes et des prédictions sont générées pour une question donnée, RLCR réduit la variance dans
+scores de confiance dans les chaînes de raisonnement qui mènent à la même réponse, et réduit le
+fréquence à laquelle les modèles attribuent un niveau de confiance élevé aux réponses contradictoires.
+Ensemble, ces résultats montrent que les méthodes existantes d’entraînement au raisonnement peuvent être facilement
+modifié pour optimiser en outre l'étalonnage, et que cela améliore à son tour leur
+précision, robustesse et évolutivité.
+2
+PRÉLIMINAIRES
+Soit πθ un modèle de langage qui mappe les invites x ∈X aux sorties y ∈Y , qui peuvent toutes deux
+être codés sous forme de chaînes. Étant donné un ensemble de données de paires invite-sortie D = {(xi, y∗
+i )} (par exemple des questions et
+réponses de vérité terrain) et une fonction de récompense R : Y × Y → R qui compare les prévisions à la vérité terrain
+réponses, notre objectif est d'améliorer les résultats du LM en optimisant :
+argument maximum
+θ
+E(x,y∗)∼D, y∼πθ(·|x) R(y, y∗) .
+(2)
+Apprentissage par renforcement avec récompenses vérifiables (RLVR)
+Lors de la formation de modèles de raisonnement, un
+le choix standard de R est la récompense d'exactitude binaire :
+Rexactitude(y, y∗) = 1y≡y∗,
+(3)
+où 1y≡y∗∈{0, 1} est la fonction indicatrice qui évalue si y est correct, c'est-à-dire équivalent
+(peut-être des détails de formatage modulo) en y∗.
+Règles de notation appropriées
+Souvent, nous voulons des prédicteurs qui génèrent non seulement une réponse y, mais aussi des valeurs scalaires.
+mesurer q la confiance dans cette réponse.1
+Une règle de notation mesure la qualité d'une estimation de confiance. Dans le cas de la modélisation de résultats binaires
+(par exemple notre confiance dans le fait qu'une réponse donnée y est correcte), une règle de notation est une fonction S : R × {0, 1} →R
+qui mappe une estimation de confiance q et un résultat o à un score scalaire. Une règle de notation est dite propre
+si sa valeur attendue est minimisée par des scores de confiance qui correspondent à la véritable probabilité de résultat :
+Ea∼p(a) S(p(a), a) ≤Ea∼p(a) S(q, a)
+(4)
+pour tout q. L’exemple le plus connu d’une règle de notation appropriée est peut-être la perte de log :
+Score logarithmique :
+S(q, une) = un log q + (1 −a) log(1 −q) .
+(5)
+Mais de nombreux autres exemples existent, notamment
+Note du Brier :
+S(q, une) = (une −q)2 ,
+(6)
+Score sphérique :
+S(q, une) = q
+.p
+q2 + (1 −q)2 .
+(7)
+Ce que tous ces scores ont en commun, c'est la propriété qu'ils sont maximisés lorsque les confiances q
+correspond à la vraie probabilité p(a = 1).
+3
+MÉTHODE
+L'idée principale derrière notre approche est de former des modèles de langage via un apprentissage par renforcement avec
+une récompense qui encourage à la fois l'exactitude et l'étalonnage, en combinant une exactitude standard
+récompense avec une récompense basée sur le score du Brier. Dans cette approche, les modèles sont d’abord invités à produire
+1Il est parfois encore plus utile de former des modèles capables de placer une distribution complète sur un large ensemble de
+réponses possibles y. Mais pour les très grands espaces de réponse ou les prédicteurs coûteux, comme les modèles de langage performants
+le raisonnement en chaîne de pensée – énumérer et noter toutes les réponses possibles est généralement peu pratique. Ce papier
+se concentre principalement sur les modèles qui génèrent une réponse et un score de confiance, mais voir la section 4.6 pour un
+manière d’utiliser cette approche pour générer et noter plusieurs réponses.
+3
+
+===== Page 4 =====
+
+0,0
+0,2
+0,4
+0,6
+0,8
+1.0
+Confiance verbalisée q
+1.0
+0,5
+0,0
+0,5
+1.0
+Récompense
+Récompense RLVR pour l'exactitude
+(réponse correcte)
+(mauvaise réponse)
+0,0
+0,2
+0,4
+0,6
+0,8
+1.0
+Confiance verbalisée q
+1.0
+0,5
+0,0
+0,5
+1.0
+Récompense
+Récompense RLCR calibrée (la nôtre)
+(réponse correcte)
+(mauvaise réponse)
+Figure 2 : (a) : RLVR se concentre uniquement sur l’exactitude, ce qui peut inciter à deviner. (b) : RLCR utilise
+une récompense calibrée qui optimise conjointement l’exactitude et l’étalonnage.
+des chaînes de raisonnement qui produisent à la fois des réponses et des estimations de confiance (comme sur la figure 1a). Ils sont alors
+formés pour optimiser :
+RRLCR(y, q, y∗) = 1y≡y∗−(q −1y≡y∗)2 .
+(8)
+Intuitivement, cette récompense encourage l'exactitude mais pénalise les modèles lorsqu'ils génèrent des résultats incorrects.
+des réponses avec un niveau de confiance élevé ou des réponses correctes avec un niveau de confiance faible.
+Il n’est pas immédiatement évident que cette fonction de récompense encourage le comportement souhaité du LM, car elle
+implique un compromis entre précision (le premier terme) et calibrage (le second), on pourrait s'inquiéter
+que les modèles apprendront à produire des réponses qui seront certainement fausses afin d'obtenir un petit calibrage
+perte. Mais en fait, le terme d'étalonnage dans l'équation. (8) n’a aucun coût en termes de précision :
+Théorème 1. Supposons, pour toute prédiction y possible, que l’indicateur de succès 1y≡y∗ soit tiré de
+une distribution Bernoulli(py).
+Puis RRLCR dans l'équation. (8) satisfait deux propriétés :
+1. Incitation à l’étalonnage. Pour tout y, la récompense attendue E1y≡y∗RRLCR(y, q, y∗) est maximisée
+quand q = py.
+2. Incitation à l'exactitude. Parmi toutes les prédictions calibrées (y, py), la récompense attendue est maximale-
+optimisé par la prédiction dont la probabilité de succès py est la plus grande.2
+La preuve est donnée en annexe A.
+Une propriété importante du théorème 1 est que nous ne pouvons pas remplacer le terme de Brier (q −1y≡y∗)2 par
+toute règle de notation appropriée - par exemple la perte de log 1y≡y∗log q + (1 −1y≡y∗) log(1 −q) ne fait pas
+encourager l’exactitude. Cependant, comme indiqué à l’Annexe A, une version analogue du Théorème 1
+existe pour toute règle de notation appropriée limitée.
+4
+EXPÉRIENCES
+Nos principales expériences visent à évaluer comment le RLCR modifie empiriquement la précision et l'étalonnage.
+des LM, à la fois dans les évaluations « dans le domaine » sur la tâche utilisée pour RL, et dans les évaluations « hors domaine »
+sur d'autres tâches de réponse à des questions. Des expériences supplémentaires évaluent les interactions entre RLCR et
+d'autres paradigmes de raisonnement au moment du test, le rôle du raisonnement dans l'estimation de la confiance en particulier, et
+la mesure dans laquelle le RLCR rend les prédictions LM plus cohérentes entre les prédictions.
+2Notez que l’énoncé du problème ne fait pas de distinction entre l’incertitude épistémique et aléatoire sur
+succès. Évidemment, une fois y prédit, le résultat de l’évaluation est entièrement déterminé et l’objectif
+probabilité que y ≡y∗ soit 0 ou 1. Mais un prédicteur contraint par l'information ou le calcul peut toujours
+possèdent une incertitude subjective.
+4
+
+===== Page 5 =====
+
+(une)
+(b)
+Figure 3 : (a) Courbes de récompense pour RLCR (la nôtre) et RLVR. Récompenses d’exactitude et d’étalonnage
+améliorer selon notre méthode, démontrant des gains simultanés en termes d'exactitude et d'étalonnage. Le Brier
+la récompense est décalée vers le haut de 1 pour plus de clarté. (b) Durées d'achèvement pendant la formation. L'achèvement
+la durée de notre méthode augmente progressivement au cours de la formation à mesure que le raisonnement sur l'incertitude s'améliore.
+4.1
+CONFIGURATION EXPÉRIMENTALE
+Détails de la formation
+Nous utilisons GRPO comme algorithme RL de base avec quelques modifications (voir Annexe B.2).
+Suite à des travaux récents sur la formation RL pour le raisonnement LM (Hu et al., 2025 ; Guo et al., 2025), nous
+initialisez à partir de RL à partir du modèle de base et n'utilisez aucune régularisation KL. Plus précisément, nous utilisons le
+Modèle de base Qwen2.5-7B, faisant partie de la famille Qwen reconnue pour ses solides performances dans les tâches RL (Hu
+et coll., 2025 ; Gandhi et al., 2025). Pour HotPotQA, nous utilisons une longueur de réponse maximale de 1 536 tandis que
+pour les mathématiques, nous utilisons 4096. Pour permettre une vérification plus facile et des sorties plus structurées, nous augmentons l'équation. (8)
+avec une récompense au format simple qui encourage les modèles à entourer les CoT dans les bonnes balises.
+Méthodes
+Nous évaluons les méthodes suivantes :
+1. Base : le modèle de base pré-entraîné. Nous utilisons la base Qwen2.5-7B dans nos expériences.
+2. RLVR : initialisé à partir du modèle de base et entraîné à l'aide de Rcorrectness avec <think> et
+Balises <réponse>. Lors de l'évaluation, il est également demandé au modèle de verbaliser sa confiance.
+3. Classificateur RLVR + BCE : un classificateur de confiance formé sur les sorties du modèle RLVR.
+Plus précisément, étant donné un ensemble de données de problèmes, de solutions CoT (de RLVR) et d'exactitude
+étiquettes (x, y, 1y≡y∗), nous entraînons un classificateur fθ(x, y) pour prédire le score de confiance du modèle
+en utilisant la perte d'entropie croisée binaire (BCE):
+LBCE(θ) = −E(x,y,1y≡y∗) [1y≡y∗log fθ(x, y) + (1 −1y≡y∗) log(1 −fθ(x, y))]
+(9)
+où fθ(x, y) ∈(0, 1) est la confiance du classificateur. Le classificateur est initialisé à partir de
+Qwen2.5-7B Base et est donc très expressif. Cette approche est coûteuse, car elle nécessite
+formation et inférence de deux grands modèles.
+4. Classificateur RLVR + Brier : au lieu d'utiliser la perte d'entropie croisée binaire (BCE), nous utilisons la moyenne
+erreur quadratique (MSE), qui permet une optimisation plus directe du score du Brier :
+LBrier(θ) = E(x,y,1y≡y∗)
+h
+(fθ(x, y) −1y=y∗)2i
+(10)
+5. RLVR + Probe : Étant donné l'intégration de couche finale ϕ(x, y) du modèle RLVR, nous formons un
+sonde linéaire pour prédire les scores de confiance : dans l'équation. (9), nous remplaçons le LM affiné par un
+modèle linéaire :
+fθ(x, y) = log σ(θ⊤ϕ(x, y))
+(11)
+où σ(·) désigne la fonction sigmoïde. Cette méthode est étroitement liée au classificateur, mais
+le remplace par une sonde linéaire simple et moins expressive.
+6. Probabilité de réponse : nous générons des sorties à l'aide de RLVR, extrayons les jetons contenus à l'intérieur
+les balises <answer>, et calculons leur probabilité moyenne :
+RéponseProb(y) =
+1
+|UNE|
+X
+t∈A
+Pθ(yt | y<t, x)
+(12)
+5
+
+===== Page 6 =====
+
+Ici, y = (y1, y2, . . . , yT ) est la séquence entièrement générée. L'ensemble A ⊆{1, . . . , T} désigne
+les positions des jetons qui apparaissent entre les balises <answer>. Pθ(yt | y<t, x) représente le
+probabilité du modèle de générer le jeton yt.
+7. RLCR (le nôtre) : initialisé à partir du modèle de base et formé à l'aide de RRLCR.
+Métriques d'évaluation Nous utilisons les métriques d'évaluation suivantes :
+1. Précision (↑) : Une mesure de performance.
+2. Aire sous la courbe ROC (AUROC) (↑) : mesure la capacité du classificateur à distinguer entre
+classes positives/négatives à travers les seuils.
+AUROC =
+Z1
+0
+TPR(FPR−1(t))dt
+(13)
+où TPR est le taux de vrais positifs et FPR est le taux de faux positifs.
+3. Score Brier (↓) : différence au carré entre la confiance et la vérité terrain.
+Note du Brier = 1
+N
+N
+X
+je = 1
+(qi −1yi≡y∗
+je )2
+(14)
+4. Erreur d'étalonnage attendue (ECE) (↓) : métrique d'étalonnage qui regroupe les confiances en
+bins et calcule la différence entre l'exactitude moyenne et la confiance.
+CEE =
+M
+X
+m=1
+|Bm|
+N
+|acc(Bm) −conf(Bm)|
+(15)
+où M est le nombre de bacs, Bm est l'ensemble d'échantillons dans le bac m et N est le nombre de
+des échantillons. Nous utilisons M=10.
+Ensembles de données d'évaluation Nous évaluons notre méthode sur des critères qui mettent en évidence des sources distinctes de
+incertitude. HotPotQA (Yang et al., 2018) teste l'étalonnage sous des preuves incomplètes ou gênantes,
+tandis que SimpleQA (Wei et al., 2024) et TriviaQA (Joshi et al., 2017) sondent l'excès de confiance sur des sujets obscurs.
+connaissance factuelle; GPQA (Rein et al., 2024), Math500 (Hendrycks et al., 2021), GSM8K (Cobbe
+et al., 2021) et Big-Math (Albalak et al., 2025) évaluent l'étalonnage dans des contextes complexes, en plusieurs étapes ou
+raisonnement scientifique, où l’incertitude s’accumule au fil des étapes. CommonsenseQA (Talmor et coll.,
+2019) examine la confiance dans des scénarios de raisonnement ambigus et implicites. Ensemble, ces ensembles de données
+capturer les principaux types d’incertitude, depuis les preuves ambiguës jusqu’aux connaissances rares et aux raisonnements complexes.
+4.2
+HOTPOTQA
+Ensemble de données
+Nous utilisons un ensemble de données de distraction HotPotQA modifié (Yang et al., 2018) avec des questions multi-sauts
+et 10 paragraphes (2 pertinents, 8 distractions). Pour tester le raisonnement d'incertitude, HotPotQA-Modified
+supprime 0, 1 ou les deux paragraphes pertinents, créant ainsi une exhaustivité variable des informations. L'ensemble de données est
+répartis uniformément entre ces conditions, avec 8 paragraphes par exemple. Nous nous formons sur 20 000 exemples
+et utilisez la correspondance exacte de chaîne pour calculer l'exactitude.
+Performances en distribution
+La figure 3 montre les courbes d'entraînement pour RLCR et RLVR. Les deux
+l'exactitude et la récompense d'étalonnage du RLCR augmentent progressivement, indiquant que le modèle est capable de
+améliorer conjointement la précision et l'étalonnage. Le tableau 1 montre les résultats sur le attracteur HotpotQA d'origine
+ensemble de données. Comme prévu, les modèles formés par RL surpassent les modèles disponibles dans le commerce en termes de précision multi-sauts.
+RLCR correspond à RLVR en termes de précision, montrant que le terme d'étalonnage ne nuit pas aux performances.
+Cependant, la base et le RLVR sont très confiants et mal calibrés. En revanche, notre
+La méthode et les classificateurs sont bien mieux calibrés, avec notre méthode légèrement en avance. La réponse
+La référence de probabilité présente également un mauvais calibrage et un excès de confiance, car le modèle arrive généralement
+à sa réponse lors du raisonnement CoT, ce qui rend la probabilité ultérieure de produire cette réponse
+dans les balises <answer> extrêmement élevées.
+6
+
+===== Page 7 =====
+
+(a) Modèles formés sur HotpotQA
+Méthode
+HotpotQA
+O.O.D
+Acc.
+AUROC
+Brier
+CEE
+Acc.
+AUROC
+Brier
+CEE
+(↑)
+(↑)
+(↓)
+(↓)
+(↑)
+(↑)
+(↓)
+(↓)
+Socle
+39,7%
+0,54
+0,53
+0,53
+53,3%
+0,54
+0,41
+0,40
+RLVR
+63,0%
+0,50
+0,37
+0,37
+53,9%
+0,50
+0,46
+0,46
+Classificateur RLVR + BCE
+63,0%
+0,66
+0,22
+0,07
+53,9%
+0,58
+0,27
+0,24
+RLVR + Brier
+63,0%
+0,65
+0,22
+0,09
+53,9%
+0,60
+0,32
+0,33
+RLVR + Sonde
+63,0%
+0,55
+0,24
+0,10
+53,9%
+0,53
+0,38
+0,38
+Répondre au problème
+63,0%
+0,72
+0,36
+0,36
+53,9%
+0,60
+0,42
+0,42
+RLCR (le nôtre)
+62,1%
+0,69
+0,21
+0,03
+56,2%
+0,68
+0,21
+0,21
+(b) Modèles formés sur Big-Math
+Méthode
+Mathématiques
+O.O.D Moyenne
+Acc.
+AUROC
+Brier
+CEE
+Acc.
+AUROC
+Brier
+CEE
+(↑)
+(↑)
+(↓)
+(↓)
+(↑)
+(↑)
+(↓)
+(↓)
+Socle
+56,1%
+0,56
+0,40
+0,39
+47,8%
+0,53
+0,46
+0,45
+RLVR
+72,9%
+0,47
+0,28
+0,26
+52,5%
+0,52
+0,49
+0,49
+RLVR +Classificateur
+72,9%
+0,78
+0,15
+0,10
+52,5%
+0,55
+0,34
+0,33
+RLVR + Brier-Classificateur
+72,9%
+0,78
+0,15
+0,10
+52,5%
+0,57
+0,28
+0,27
+RLVR + Sonde
+72,9%
+0,65
+0,19
+0,13
+52,5%
+0,53
+0,33
+0,30
+Répondre au problème
+72,9%
+0,52
+0,26
+0,26
+52,5%
+0,52
+0,44
+0,43
+RLCR (le nôtre)
+72,7%
+0,67
+0,17
+0,10
+50,9%
+0,60
+0,28
+0,25
+SFT+RLCR (le nôtre)
+72,2%
+0,78
+0,14
+0,08
+43,8%
+0,66
+0,24
+0,18
+Tableau 1 : Métriques de précision et d'étalonnage pour les modèles formés sur HotpotQA et Big-Math.
+(a) Performances sur HotpotQA et 6 ensembles de données hors distribution (O.O.D). RLCR réalise
+une précision compétitive et surpasse considérablement toutes les lignes de base en matière d'étalonnage, en particulier sur l'O.O.D.
+ensembles de données, démontrant les avantages de l’optimisation conjointe de la précision et de l’étalonnage. (b) Performances
+sur les mathématiques et 5 ensembles de données hors distribution (O.O.D.). Les résultats mathématiques sont moyennés sur 3 ensembles de données :
+Math-500, GSM8K et Big-Math. La variante SFT+RLCR permet d'obtenir le meilleur étalonnage dans les deux cas
+paramètres de distribution et O.O.D, démontrant les avantages de l'échauffement SFT. Cependant, cela vient
+au prix d'une précision de généralisation réduite, peut-être en raison d'un oubli catastrophique. RLCR propose un
+compromis plus fort dans les paramètres O.O.D, maintenant une précision compétitive tout en améliorant l'étalonnage
+par rapport à toutes les lignes de base.
+Généralisation
+Nous évaluons les performances de généralisation sur six ensembles de données : TriviaQA, SimpleQA,
+MATH500, GSM8K, CommonsenseQA et GPQA. Le tableau 1 présente la performance moyenne sur
+ces ensembles de données (résultats individuels à l’annexe D). La précision du modèle de base correspond étroitement à celle
+des modèles formés avec RL, indiquant que la formation RL sur HotpotQA n'améliore pas l'OOD
+raisonnement. De plus, le RLVR nuit en fait au calibrage par rapport au modèle de base en cas de non-distribution.
+tâches. En revanche, le RLCR réalise des gains substantiels sur toutes les lignes de base et sur les mesures d'étalonnage.
+tout en maintenant (ou en améliorant légèrement) la précision des tâches. Nous émettons l’hypothèse qu’un meilleur calibrage
+La généralisation du RLCR pourrait être due à :
+1. Incertitude dans le raisonnement en chaîne de pensée Le raisonnement sur l'incertitude peut s'améliorer
+calibrage en permettant une réflexion sur la confiance, dans la lignée des travaux récents (Yoon et al., 2025).
+2. Dynamique de formation de RL Pendant la formation RL, l'analyse de confiance et les scores du modèle
+doivent constamment s’adapter à l’amélioration des performances des tâches du modèle. Cette non-stationnarité
+pourrait conduire à un apprentissage plus robuste et à une meilleure généralisation.
+7
+
+===== Page 8 =====
+
+(une)
+(b)
+Figure 4 : Courbes de mise à l’échelle du temps de test. (a) Précision par rapport au nombre d’échantillons (N). La précision s'améliore
+pour toutes les méthodes avec calcul croissant. Le vote majoritaire pondéré en fonction de la confiance surpasse les deux
+vote majoritaire et confiance maximale, soulignant les avantages complémentaires de la combinaison du vote avec
+scores de confiance. (b) Scores du Brier par rapport à la taille de l'ensemble (K). Ici, nous évaluons l'effet de l'application
+mise à l'échelle du temps de test jusqu'à l'estimation de la confiance seule, en rééchantillonnant plusieurs analyses (texte bleu sur la figure 1).
+L'étalonnage s'améliore à mesure que la taille de l'ensemble d'analyse augmente.
+3. Représentations partagées Utilisation d'un modèle unique pour la génération de solutions et l'étalonnage
+permet à la tâche d'étalonnage d'exploiter les représentations internes utilisées par la solution générant
+processus, améliorant éventuellement la généralisation.
+4.3
+MATHÉMATIQUES
+Ensemble de données
+Nous utilisons Big-Math (Albalak et al., 2025), un vaste ensemble de données de formation organisé pour RL contenant
+plus de 250 000 problèmes mathématiques, y compris des questions issues de tests tels que Math et GSM8K. Nous
+conserver les problèmes pour lesquels le taux de résolution du LLaMA-8B (fourni dans l'ensemble de données) est compris entre 0 et 70 % et
+limiter l'ensemble de données aux problèmes avec des réponses numériques, permettant une vérification automatique presque parfaite.
+Notre ensemble de formation final comprend 15 000 problèmes. Nous calculons l'exactitude en utilisant math-verify3, un
+système d’évaluation d’expression robuste.
+Échauffement SFT
+Bien que l'application de RL directement au modèle de base améliore la récompense calibrée, le
+les analyses d'incertitude produites en mathématiques restent qualitativement génériques, manquant souvent de raisonnement lié
+à des étapes de solution spécifiques (voir l'annexe D.2 pour un exemple). Pour améliorer leur qualité, nous formons un
+variante avec une phase d'échauffement SFT légère avant RL. Plus précisément, nous générons des solutions à partir de
+le modèle de base sur 500 exemples et invite Deepseek-R1 à produire des analyses d'incertitude pour eux.
+Plus de détails à l'annexe B.2.
+Résultats
+Sur les benchmarks Math (moyenne sur GSM8K, Math et Big-Math), toutes les méthodes RL
+améliorer considérablement la précision par rapport au modèle de base. SFT + RLCR réalise le meilleur calibrage,
+dépassant légèrement les classificateurs, tandis que la base et le RLVR restent mal calibrés. Hors distribution
+(TriviaQA, SimpleQA, CommonsenseQA, GPQA, HotPotQA), les précisions de RLCR et RLVR
+sont légèrement meilleurs que le modèle de base, mais étonnamment, la précision du modèle SFT+RLCR
+diminue de manière significative, probablement en raison d'un oubli catastrophique induit par l'échauffement SFT. Malgré cela,
+SFT+RLCR réalise l’étalonnage le plus puissant. RLCR offre un compromis plus fort en O.O.D. paramètres,
+maintenir la précision tout en correspondant ou en surpassant toutes les références d’étalonnage.
+4.4
+LES CONFIANCES VERBALISÉES PEUVENT-ELLES ÊTRE UTILISÉES POUR LA MISE À L'ÉCHELLE DU TEMPS DE TEST ?
+Nous évaluons ensuite si les scores de confiance du RLCR peuvent être intégrés dans la mise à l'échelle de la durée du test.
+algorithmes pour apporter des améliorations à la fois en termes de précision et d’étalonnage.
+3https://github.com/huggingface/Math-Verify
+8
+
+===== Page 9 =====
+
+(une)
+(b)
+Figure 5 : scores Brier (a) et ECE (b) des classificateurs de référence/analyse sur HotPotQA-Modified
+en trois tailles de modèles. Les classificateurs d'analyse surpassent les lignes de base à des tailles plus petites, ce qui suggère que
+L'incertitude CoT est essentielle pour un meilleur étalonnage lorsque la capacité est limitée.
+Précision
+Étant donné N réponses y1, y2, ...yN et un modèle de récompense r(x, y), le meilleur des N sélectionne le
+réponse avec la plus haute récompense :
+ychoisi =
+argument maximum
+{y1,...,yN}∼p(·|x)
+R(x, yi) .
+(16)
+De même, le vote majoritaire sélectionne la réponse la plus fréquente parmi les N réponses. Des travaux antérieurs ont également
+combiné les deux, donnant un vote majoritaire pondéré, où le vote est pondéré en utilisant les scores de
+le modèle de récompense.
+Notre idée clé est que la confiance verbalisée q produite par le modèle peut servir d’indicateur efficace.
+récompense par procuration. Dans le meilleur des N, nous pouvons sélectionner la réponse avec la confiance verbalisée la plus élevée parmi
+l’ensemble des N candidats. Nous appelons cela la confiance maximale. De même, nous étendons le vote majoritaire
+à un vote majoritaire pondéré en fonction de la confiance, où le vote de chaque réponse est pondéré par son associé.
+score de confiance. Il est important de noter que ces deux approches ne nécessitent aucune supervision ou
+modèles de récompense externes.
+Nous utilisons le modèle RLCR formé sur Hotpot pour la génération et traçons la précision moyenne sur les 7
+ensembles de données utilisés dans le tableau 1. La figure 4a montre que la précision s'améliore avec le calcul dans toutes les méthodes.
+Le vote majoritaire pondéré par la confiance surpasse à la fois le vote majoritaire vanille et la confiance maximale,
+ce qui indique que combiner la confiance et le vote peut produire des avantages complémentaires. Bien que max-
+la confiance est moins performante dans les deux variantes de vote, elle est plus flexible et reste précieuse dans les contextes
+où l'agrégation des réponses (nécessaire pour le vote) est irréalisable, comme la synthèse de programme ou
+d'autres tâches de génération ouvertes. Dans l’ensemble, les gains de précision de ces algorithmes de mise à l’échelle sont étroitement liés
+liés à l’étalonnage – les améliorations de l’étalonnage se traduiront par des améliorations de la précision.
+Calibrage
+Dans notre CoT RLCR structuré, les modèles génèrent d'abord une solution, suivie d'une analyse
+et score de confiance. Pour améliorer les scores de confiance pour une réponse fixe y, nous échantillonnons l'analyse K
+CoTs z1, . . . , zK ∼p(· | x, y), chacun produisant une confiance verbalisée qi. Nous regroupons ensuite ces
+confiances pour obtenir l’estimation de confiance agrégée ¯q = 1
+K
+P.
+je qi. La figure 4b représente le score de Brier
+(moyenne sur 7 ensembles de données) en fonction de la taille de l'ensemble K. Nous observons une diminution du score de Brier avec
+des ensembles plus grands, ce qui indique que l'assemblage sur des CoT d'incertitude améliore efficacement l'étalonnage.
+Pour une solution et une réponse données, encadrer des confidences verbalisées est léger et ne nécessite que
+échantillonnage supplémentaire, contrairement aux classificateurs ou aux sondes, qui nécessiteraient la formation de plusieurs têtes/modèles.
+4.5
+LE RAISONNEMENT AMÉLIORE-T-IL LE CALIBRAGE ?
+Des travaux récents ont montré que le raisonnement CoT peut être infidèle, avec des CoT générés qui ne
+influencer leurs réponses finales (Chen et al., 2025). Cela soulève la possibilité que l'analyse de l'incertitude
+peut ne pas éclairer de manière significative le score de confiance verbalisé. Pour tester cela, nous formons deux classificateurs sur
+HotPotQA-Modifié :
+9
+
+===== Page 10 =====
+
+(une)
+(b)
+Figure 6 : (a) : Distribution de l’écart type du niveau de confiance sur plusieurs incertitudes
+chaînes de raisonnement pour la même solution/réponse. La plupart des échantillons présentent un faible écart, ce qui indique que
+les estimations de confiance du modèle sont auto-cohérentes. (b) Diagramme en essaim des sommes de confiance sur
+3 jeux de données. Le RLCR reste systématiquement plus proche de la somme idéale de 1. Néanmoins, l’excès de confiance
+demeure, ce qui laisse penser qu’il y a encore place à l’amélioration.
+1. Classificateur de base : formé sur les sorties du RLVR (ceux-ci ne contiennent aucune analyse d'incertitude).
+2. Classificateur d'analyse : formé sur les résultats du RLCR avec des scores de confiance (présents dans
+<confidence> tags) supprimés pour empêcher le piratage direct.
+Comme les deux modèles RL ont une précision de tâche comparable, des différences dans les performances du classificateur seraient
+indiquent que les chaînes de raisonnement du modèle formé par RLCR contiennent des informations spécifiquement utiles
+pour l'étalonnage. Nous formons des classificateurs pour 3 tailles différentes du modèle Qwen-base : 0,5B,
+1,5B et 7B. La figure 5 montre les scores Brier et ECE sur HotPotQA-Modified. Fait intéressant, alors que
+Les classificateurs 7B fonctionnent de manière similaire, le classificateur d'analyse surpasse la ligne de base pour des tailles plus petites,
+ce qui suggère que la capacité du classificateur est essentielle. Pour un classificateur suffisamment expressif (comme avec le modèle 7B),
+il est possible de déduire des fonctionnalités pertinentes pour la confiance directement à partir de la solution. En revanche, plus petit
+les classificateurs peuvent mieux utiliser les chaînes de raisonnement RLCR. Nous pensons que des questions plus larges sur
+la relation entre la capacité du classificateur et le contenu du CoT constitue un sujet important pour les travaux futurs.
+4.6
+LES CONFIANCES VERBALISÉES SONT-ELLES COHÉRENTES ?
+Cohérence intra-solution Une propriété souhaitable du raisonnement sensible à l'incertitude est qu'un modèle doit
+attribuer des estimations de confiance cohérentes lors de la génération de plusieurs chaînes de raisonnement d'incertitude pour le
+même réponse. Étant donné une réponse fixe y, nous échantillonnons K analyse CoTs z1, . . . , zK ∼p(· | x, y), où
+chaque chaîne produit un score de confiance verbalisé qi. Idéalement, ces scores de confiance devraient montrer
+faible variabilité, indiquant des estimations d'incertitude stables pour une réponse donnée.
+La figure 6b représente l'écart type sur sept ensembles de données, à l'aide des CoT d'analyse générés par le
+Modèle RLCR formé sur HotpotQA. La plupart des échantillons ont un faible écart type, ce qui suggère que
+les estimations de confiance verbalisées du modèle sont généralement cohérentes.
+Cohérence inter-solutions Pour les tâches où les réponses s'excluent mutuellement, c'est-à-dire une seule réponse
+peut être correct par exemple : il est souhaitable que le modèle répartisse sa confiance sur des sujets distincts.
+réponses telles que la confiance totale soit égale à 1.
+Laissez un modèle générer N réponses {yi}N
+i=1 avec les scores de confiance associés {qi}N
+i=1, où qi ∈
+[0, 1]. Soit A = {a1, . . . , aK} désigne l'ensemble des K ≤N réponses uniques parmi les yi. La moyenne
+la confiance attribuée à la réponse ak est :
+¯qk =
+P.
+je 1yi≡ak · qi
+P.
+je 1yi≡ak
+(17)
+En supposant que les réponses en A soient mutuellement exclusives et exhaustives (c'est-à-dire qu'une seule est correcte), le
+les confiances du modèle devraient idéalement totaliser un : PK
+k=1 ¯qk = 1. Cela reflète l’exigence de
+cohérence interne dans les croyances du modèle.
+10
+
+===== Page 11 =====
+
+La figure 6b montre un diagramme en essaim de sommes de confiance prévues sur trois ensembles de données représentatifs.
+Sur l'ensemble de données HotpotQA en distribution, les sommes de confiance du RLCR se regroupent étroitement autour de 1, indiquant
+distribution de croyances bien calibrée. Pour les ensembles de données hors distribution, RLCR et RLVR présentent tous deux
+excès de confiance, avec des sommes supérieures à 1, même si le RLCR reste nettement plus proche de l'idéal.
+Cela reflète l'étalonnage amélioré du RLCR, mais met en évidence une marge d'amélioration dans l'inter-solution.
+cohérence, en particulier hors distribution.
+5
+TRAVAIL CONNEXE
+Construire des modèles de raisonnement fiables nécessite non seulement une grande précision, mais également un
+la tainty – une propriété que les objectifs standards de RL érodent souvent (Achiam et al., 2023), laissant les modèles
+trop confiant (Xiong et al., 2024) et sujet aux hallucinations (Jaech et al., 2024). Pour situer notre
+approche RLCR proposée dans ce paysage, nous examinons quatre volets de travaux antérieurs sur la confiance
+estimation dans les LLM : (i) verbalisations post-hoc, (ii) substituts basés sur l'échantillonnage, (iii) signal interne
+sondage, et (iv) étalonnage basé sur RL.
+Les verbalisations post-hoc incitent les modèles à exprimer leur confiance après avoir répondu (Xiong et al., 2024 ;
+Yang et coll., 2024 ; Tanneru et al., 2024 ; Lin et coll., 2022). Lin et coll. (2022) affinent GPT-3 pour prédire
+confiance étant donné une question et une réponse, en utilisant la précision empirique de GPT-3 sur cette question comme objectif
+obtenir l'étiquette. Xiong et coll. (2024) constatent que les LM font preuve d'un excès de confiance lorsqu'ils expriment leur confiance,
+bien que l'étalonnage s'améliore avec l'augmentation de la capacité du modèle. Tian et coll. (2023) constate que le RLHF
+Les scores de confiance verbalisés des modèles sont mieux calibrés que leurs probabilités conditionnelles sur l’ensemble du modèle.
+plusieurs repères. Des travaux récents ont examiné le calibrage de la confiance verbalisée dans le raisonnement
+modèles. Mei et coll. (2025) constatent que même les modèles de raisonnement souffrent également d’un excès de confiance et peuvent
+devenir encore plus confiant avec un raisonnement plus profond. De même, Kirichenko et al. (2025) introduisent
+AbstentionBench et montrer que les ML ont du mal à s'abstenir de manière appropriée, avec un raisonnement affiné
+dégradant souvent les performances d’abstention. Positivement, Yoon et al. (2025) et Mei et coll. (2025) trouvent que
+les modèles de raisonnement peuvent améliorer leur calibrage par l’introspection et les comportements CoT à réflexion lente.
+Les méthodes basées sur l'échantillonnage utilisent l'accord de réponse (par exemple, vote majoritaire ou meilleur des N) comme proxy pour
+confiance, mais sont coûteux et nécessitent une vérité terrain claire (Kang et al., 2025). Aichberger et coll. (2025)
+estimer l’incertitude en générant des réponses sémantiquement diverses et plausibles et en mesurant leur
+cohérence. Kuhn et coll. (2023) proposent l'entropie sémantique, une méthode basée sur l'échantillonnage qui prend en compte
+invariances linguistiques pour mieux estimer l'incertitude dans la génération du langage naturel.
+Le sondage interne extrait la confiance des caractéristiques du modèle telles que les probabilités de jetons (Gupta et al., 2024),
+offrant des partitions fines mais manquant de généralité. Kadavath et coll. (2022) modèles de langage d'invite
+afficher « vrai » ou « faux » pour une réponse donnée et utiliser la probabilité de prédire « vrai » P(vrai),
+comme indicateur de la confiance du modèle. Mielke et coll. (2022) former un LM à générer des réponses
+conditionnée aux estimations de confiance fournies par une sonde externe. Fadeeva et coll. (2024) proposent
+Claim Conditioned Probability, une méthode d'incertitude au niveau du jeton qui exploite les signaux du modèle interne
+pour vérifier les allégations et détecter les hallucinations. Azaria & Mitchell (2023) forment un classificateur sur des
+activations de couches pour détecter la véracité des déclarations en fonction de l’état interne du LLM. Orgade
+et coll. (2025) montrent que les représentations internes codent des signaux de véracité riches, au niveau symbolique, qui
+peut détecter et catégoriser les erreurs au-delà de ce qui est reflété dans le résultat.
+Les méthodes basées sur RL entraînent les modèles à produire des confiances verbales calibrées avec RL. Stengel-Eskin
+et coll. (2024) introduisent un cadre locuteur-auditeur, dans lequel les récompenses du locuteur sont déterminées par
+la confiance déduite de l’auditeur dans les réponses de l’orateur. Leng et coll. (2025) introduisent des
+scores de confiance dans la formation des modèles de récompense, obtenant des modèles de récompense mieux alignés sur
+des confidences verbalisées. Plus étroitement lié à notre travail, Xu et al. (2024) et Stangel et al. (2025)
+former les LM avec RL en utilisant des règles de notation appropriées comme fonctions de récompense. Xu et coll. (2024) adoptent le
+score de Brier, tandis que Stangel et al. (2025) utilisent une version tronquée de la perte de journal. Bien qu'efficaces, ces
+les approches optimisent uniquement pour l'étalonnage, ce qui peut nuire par inadvertanceprécision des tâches, en particulier
+dans des modèles plus grands qui peuvent exploiter l'objectif en produisant des réponses délibérément incorrectes avec
+confiance nulle pour obtenir des scores d’étalonnage parfaits. De plus, les deux méthodes sont développées et
+évalué exclusivement sur des tâches non raisonnantes. En revanche, nous proposons une fonction de récompense calibrée
+qui encourage de manière prouvée à la fois l’exactitude et l’étalonnage, et nous démontrons son efficacité sur
+des critères de raisonnement et de non-raisonnement.
+11
+
+===== Page 12 =====
+
+6
+CONCLUSION
+Nous montrons qu'incorporer des règles de notation appropriées dans RL, via un objectif que nous appelons RLCR, permet
+modèles de raisonnement pour améliorer à la fois la précision et l’étalonnage. Notre approche entraîne les modèles à raisonner
+sur et verbaliser l’incertitude, préservant ainsi la performance des tâches tout en améliorant considérablement l’étalonnage
+en distribution et hors distribution. Nous démontrons que raisonner sur l'incertitude améliore l'étalonnage,
+et que notre méthode améliore l'auto-cohérence de la confiance et s'améliore avec le temps de test
+mise à l'échelle. Cependant, il reste une marge d'amélioration significative, même après RLCR, hors domaine
+L'erreur d'étalonnage est souvent élevée dans l'absolu, et les modèles peuvent toujours accorder un niveau de confiance élevé à
+plusieurs réponses contradictoires. Néanmoins, ces résultats suggèrent une voie vers des systèmes de raisonnement
+qui sont non seulement précis, mais qui raisonnent et communiquent de manière fiable l’incertitude.
+RÉFÉRENCES
+Josh Achiam, Steven Adler, Sandhini Agarwal, Lama Ahmad, Ilge Akkaya, Florencia Leoni Aleman,
+Diogo Almeida, Janko Altenschmidt, Sam Altman, Shyamal Anadkat et al. Gpt4. préimpression arXiv
+arXiv :2303.08774, 2023.
+Lukas Aichberger, Kajetan Schweighofer, Mykyta Ielanskyi et Sepp Hochreiter. Améliorer
+estimation de l’incertitude grâce à la génération de langages sémantiquement divers. Au XIIIe
+Conférence internationale sur les représentations d'apprentissage, 2025.
+Alon Albalak, Duy Phung, Nathan Lile, Rafael Rafailov, Kanishk Gandhi, Louis Castricato, Anikait
+Singh, Chase Blagden, Violet Xiang, Dakota Mahan et coll. Big-math : une approche à grande échelle et de haute qualité
+ensemble de données mathématiques pour l'apprentissage par renforcement dans les modèles de langage. préimpression arXiv arXiv:2502.17387,
+2025.
+Amos Azaria et Tom Mitchell. L’état interne d’un cabinet sait quand il ment. Méthodes empiriques
+dans Résultats du traitement du langage naturel, 2023. URL https://arxiv.org/abs/2304.13734.
+Glenn W. Brier. Vérification des prévisions exprimées en termes de probabilité. Bilan météo mensuel,
+78(1):1-3, 1950.
+Yanda Chen, Joe Benton, Ansh Radhakrishnan, Jonathan Uesato, Carson Denison, John Schulman,
+Arushi Somani, Peter Hase, Misha Wagner, Fabien Roger, Vlad Mikulik, Samuel R. Bowman, Jan
+Leike, Jared Kaplan et Ethan Perez. Les modèles de raisonnement ne disent pas toujours ce qu’ils pensent, 2025.
+URL https://arxiv.org/abs/2505.05410.
+Karl Cobbe, Vineet Kosaraju, Mohammad Bavarian, Mark Chen, Heewoo Jun, Lukasz Kaiser,
+Matthias Plappert, Jerry Tworek, Jacob Hilton, Reiichiro Nakano, Christopher Hesse et John
+Schulman. Former des vérificateurs pour résoudre des problèmes de mots mathématiques. CoRR, abs/2110.14168, 2021. URL
+https://arxiv.org/abs/2110.14168.
+Ekaterina Fadeeva, Aleksandr Rubashevskii, Artem Shelmanov, Sergueï Petrakov, Haonan Li, Hamdy
+Moubarak, Evgenii Tsymbalov, Gleb Kuzmin, Alexander Panchenko, Timothy Baldwin, Preslav
+Nakov et Maxim Panov. Vérifier les résultats de grands modèles de langage via le niveau du jeton
+quantification de l’incertitude. CoRR, abs/2403.04696, 2024. URL https://doi.org/10.48550/
+arXiv.2403.04696.
+Kanishk Gandhi, Ayush Chakravarthy, Anikait Singh, Nathan Lile et Noah D Goodman. Cognitif
+des comportements qui permettent aux raisonneurs de s'améliorer, ou quatre habitudes de stars très efficaces. arXiv
+préimpression arXiv :2503.01307, 2025.
+Tilmann Gneiting et Adrian E Raftery. Règles de notation, prédiction et estimation strictement appropriées.
+Journal de l'American Statistics Association, 102(477):359-378, 2007.
+Daya Guo, Dejian Yang, Haowei Zhang, Junxiao Song, Ruoyu Zhang, Runxin Xu, Qihao Zhu,
+Shirong Ma, Peiyi Wang, Xiao Bi et al. Deepseek-r1 : incitation à la capacité de raisonnement dans les LLM
+via l’apprentissage par renforcement. Préimpression arXiv arXiv :2501.12948, 2025.
+12
+
+===== Page 13 =====
+
+Neha Gupta, Harikrishna Narasimhan, Wittawat Jitkrittum, Ankit Singh Rawat, Aditya Krishna
+Menon et Sanjiv Kumar. Cascades de modèles de langage : incertitude au niveau des jetons et au-delà. Dans Le
+Douzième Conférence internationale sur les représentations de l'apprentissage, 2024. URL https://openreview.
+net/forum?id=KgaBScZ4VI.
+Dan Hendrycks, Collin Burns, Saurav Kadavath, Akul Arora, Steven Basart, Eric Tang, Dawn Song,
+et Jacob Steinhardt. Mesurer la résolution de problèmes mathématiques avec l'ensemble de données MATH. Dans
+Trente-cinquième conférence sur les ensembles de données et les critères de référence des systèmes de traitement de l'information neuronale
+(2e tour), 2021. URL https://openreview.net/forum?id=7Bywt2mQsCe.
+Jingcheng Hu, Yinmin Zhang, Qi Han, Daxin Jiang, Xiangyu Zhang et Heung-Yeung Shum.
+Open-reasoner-zero : une approche open source pour étendre l'apprentissage par renforcement sur la base
+modèle. Préimpression arXiv arXiv :2503.24290, 2025.
+Aaron Jaech, Adam Kalai, Adam Lerer, Adam Richardson, Ahmed El-Kishky, Aiden Low, Alec
+Helyar, Aleksander Madry, Alex Beutel, Alex Carney et al. Carte système Openai o1. préimpression arXiv
+arXiv :2412.16720, 2024.
+Mandar Joshi, Eunsol Choi, Daniel Weld et Luke Zettlemoyer. TriviaQA : Un suivi à distance à grande échelle
+ensemble de données de défi pervisé pour la compréhension en lecture. Dans Regina Barzilay et Min-Yen Kan (éd.),
+Actes de la 55e réunion annuelle de l'Association for Computational Linguistics (Volume
+1 : Long Papers), pp. 1601–1611, Vancouver, Canada, juillet 2017. Association for Computational
+Linguistique. est ce que je: 10.18653/v1/P17-1147. URL https://aclanthology.org/P17-1147/.
+Saurav Kadavath, Tom Conerly, Amanda Askell, Tom Henighan, Dawn Drain, Ethan Perez, Nicholas
+Schiefer, Zac Hatfield-Dodds, Nova DasSarma, Eli Tran-Johnson, Scott Johnston, Sheer El Showk,
+Andy Jones, Nelson Elhage, Tristan Hume, Anna Chen, Yuntao Bai, Sam Bowman, Stanislav Fort,
+Deep Ganguli, Danny Hernandez, Josh Jacobson, Jackson Kernion, Shauna Kraavec, Liane Lovitt,
+Kamal Ndousse, Catherine Olsson, Sam Ringer, Dario Amodei, Tom Brown, Jack Clark, Nicholas
+Joseph, Ben Mann, Sam McCandlish, Chris Olah et Jared Kaplan. Modèles de langage (principalement)
+savent ce qu'ils savent. CoRR, abs/2207.05221, 2022. URL https://doi.org/10.48550/arXiv.
+2207.05221.
+Zhewei Kang, Xuandong Zhao et Dawn Song. Sélection best-of-n évolutive pour les langues étendues
+modèles via la certitude de soi. Dans le 2e atelier IA pour les mathématiques @ ICML 2025, 2025. URL https :
+//openreview.net/forum?id=nddwJseiiy.
+Polina Kirichenko, Mark Ibrahim, Kamalika Chaudhuri et Samuel J. Bell. Banc d'abstention :
+Les LLM de raisonnement échouent sur des questions sans réponse. Dans l'atelier ICML 2025 sur la fiabilité et
+Modèles de fondation responsables, 2025. URL https://openreview.net/forum?id=kYbojsAOBj.
+Lorenz Kuhn, Yarin Gal et Sebastian Farquhar. Incertitude sémantique : invariances linguistiques pour
+estimation de l'incertitude dans la génération de langage naturel. Dans la onzième conférence internationale
+sur les représentations d'apprentissage, 2023. URL https://openreview.net/forum?id=VD-AYtP0dve.
+Jixuan Leng, Chengsong Huang, Banghua Zhu et Jiaxin Huang. Apprivoiser l’excès de confiance
+LLM : Récompense l'étalonnage en RLHF. Dans la treizième Conférence internationale sur l'apprentissage
+Représentations, 2025. URL https://openreview.net/forum?id=l0tg0jzsdL.
+Stéphanie Lin, Jacob Hilton et Owain Evans. Des modèles pédagogiques pour exprimer leur incertitude dans
+mots. Transactions sur la recherche sur l'apprentissage automatique, 2022. ISSN 2835-8856. URL https :
+//openreview.net/forum?id=8s8K2UZGTZ.
+Zhiting Mei, Christina Zhang, Tenny Yin, Justin Lidard, Ola Shorinwa et Anirudha Majumdar.
+Raisonner sur l’incertitude : les modèles de raisonnement savent-ils quand ils ne savent pas ? préimpression arXiv
+arXiv :2506.18183, 2025.
+Sabrina J. Mielke, Arthur Szlam, Emily Dinan et Y-Lan Boureau. Réduire les agents conversationnels
+excès de confiance grâce à l’étalonnage linguistique. Transactions de l'Association pour le calcul
+Linguistique, 10 : 857-872, 2022. est ce que je : 10.1162/tacl a 00494. URL https://aclanthology.org/
+2022.tacl-1.50/.
+13
+
+===== Page 14 =====
+
+M Omar, BS Glicksberg, GN Nadkarni et E Klang. Un IA trop confiant ? analyse comparative LLM auto-
+évaluation dans des scénarios cliniques. medRxiv, 2024.
+OpenAI. Carte système Openai o3 et o4-mini. 2025.
+Hadas Orgad, Michael Toker, Zorik Gekhman, Roi Reichart, Idan Szpektor, Hadas Kotek et
+Yonatan Belinkov. Les LLM en savent plus qu'ils ne le montrent : sur la représentation intrinsèque du LLM
+hallucinations. Dans La treizième Conférence internationale sur les représentations d'apprentissage, 2025.
+URL https://openreview.net/forum?id=KRnsX5Em3W.
+David Rein, Betty Li Hou, Asa Cooper Stickland, Jackson Petty, Richard Yuanzhe Pang, Julien Dirani,
+Julian Michael et Samuel R Bowman. Gpqa : une référence de questions et réponses à l'épreuve de Google. Dans
+Première conférence sur la modélisation du langage, 2024.
+Paul Stangel, David Bani-Harouni, Chantal Pellegrini, Ege ¨Ozsoy, Kamilia Zaripova, Matthias
+Keicher et Nassir Navab. Récompenser le doute : une approche d'apprentissage par renforcement pour la confiance
+calibrage de grands modèles de langage. CoRR, abs/2503.02623, mars 2025. URL https://doi.
+org/10.48550/arXiv.2503.02623.
+Elias Stengel-Eskin, Peter Hase et Mohit Bansal. LACIE : réglage précis du calibrage en fonction de l'auditeur.
+tion dans les grands modèles de langage. Lors de la trente-huitième conférence annuelle sur l'information neuronale
+Systèmes de traitement, 2024. URL https://openreview.net/forum?id=RnvgYd9RAh.
+Alon Talmor, Jonathan Herzig, Nicholas Lourie et Jonathan Berant. CommonsenseQA : une question
+relever un défi ciblant les connaissances de bon sens. Dans Jill Burstein, Christy Doran et
+Thamar Solorio (éd.), Actes de la conférence 2019 de la section nord-américaine du
+Association pour la linguistique informatique : Technologies du langage humain, Volume 1 (Long et
+Short Papers), pp. 4149-4158, Minneapolis, Minnesota, juin 2019. Association for Computational
+Linguistique. est ce que je: 10.18653/v1/N19-1421. URL https://aclanthology.org/N19-1421/.
+Sree Harsha Tanneru, Chirag Agarwal et Himabindu Lakkaraju. Quantifier l’incertitude dans
+explications en langage naturel de grands modèles de langage. Lors d'une conférence internationale sur l'artificiel
+Renseignement et statistiques, pp. 1072-1080. PMLR, 2024.
+Katherine Tian, Eric Mitchell, Allan Zhou, Archit Sharma, Rafael Rafailov, Huaxiu Yao, Chelsea
+Finn et Christopher D Manning. Demandez simplement un étalonnage : stratégies pour obtenir un étalonnage
+scores de confiance issus de modèles linguistiques affinés avec des commentaires humains. Dans la conférence 2023
+sur les méthodes empiriques dans le traitement du langage naturel, 2023. URL https://openreview.net/
+forum?id=g3faCfrwm7.
+Benjamin Turtel, Danny Franklin, Kris Skotheim, Luke Hewitt et Philipp Schoenegger. Résultat-
+basé sur un apprentissage par renforcement pour prédire l’avenir. Préimpression arXiv arXiv :2505.17989, 2025.
+Kartik Waghmare et Johanna Ziegel. Règles de notation appropriées pour l’estimation et l’évaluation des prévisions.
+Préimpression arXiv arXiv :2504.01781, 2025.
+Jason Wei, Nguyen Karina, Hyung Won Chung, Yunxin Joy Jiao, Spencer Papay, Amelia Glaese,
+John Schulman et William Fedus. Mesurer la factualité abrégée dans les grands modèles de langage.
+Préimpression arXiv arXiv :2411.04368, 2024.
+Changyi Xiao, Mengdi Zhang et Yixin Cao. Bnpo : Optimisation de la politique de normalisation bêta. arXiv
+préimpression arXiv :2506.02864, 2025.
+Miao Xiong, Zhiyuan Hu, Xinyang Lu, YIFEI LI, Jie Fu, Junxian He et Bryan Hooi. Les LLM peuvent-ils
+exprimer leur incertitude ? une évaluation empirique de l'élicitation de la confiance dans les LLM. Dans Le
+Douzième Conférence internationale sur les représentations de l'apprentissage, 2024. URL https://openreview.
+net/forum?id=gjeQKFxFpZ.
+Tianyang Xu, Shujin Wu, Shizhe Diao, Xiaoze Liu, Xingyao Wang, Yangyi Chen et Jing Gao.
+Dites-vous : Enseigner aux films pour exprimer la confiance en soi avec des justifications introspectives. Dans les actes du
+Conférence 2024 sur les méthodes empiriques dans le traitement du langage naturel, pp. 5985-5998, 2024.
+Daniel Yang, Yao-Hung Hubert Tsai et Makoto Yamada. Sur les scores de confiance verbalisés pour les LLM,
+2024. URL https://arxiv.org/abs/2412.14737.
+14
+
+===== Page 15 =====
+
+Zhilin Yang, Peng Qi, Saizheng Zhang, Yoshua Bengio, William Cohen, Ruslan Salakhutdinov et
+Christopher D. Manning. HotpotQA : un ensemble de données pour des réponses à des questions multi-sauts diverses et explicables -
+ing. Dans Ellen Riloff, David Chiang, Julia Hockenmaier et Jun'ichi Tsujii (éd.), Actes
+de la Conférence 2018 sur les méthodes empiriques dans le traitement du langage naturel, pp. 2369-2380,
+Bruxelles, Belgique, octobre-novembre 2018. Association pour la linguistique computationnelle. est ce que je:
+10.18653/v1/D18-1259. URL https://aclanthology.org/D18-1259/.
+Zijun Yao, Yantao Liu, Yanxu Chen, Jianhui Chen, Junfeng Fang, Lei Hou, Juanzi Li et Tat-Seng
+Chua. Les modèles de raisonnement sont-ils plus sujets aux hallucinations ? Préimpression arXiv arXiv :2505.23646, 2025.
+Dongkeun Yoon, Seungone Kim, Sohee Yang, Sunkyoung Kim, Soyeon Kim, Yongil Kim, Eunbi
+Choi, Yireun Kim et Minjoon Seo. Les modèles de raisonnement expriment mieux leur confiance. arXiv
+préimpression arXiv :2505.14489, 2025.
+15
+
+===== Page 16 =====
+
+Un
+PREUVE DU THÉORÈME 1
+Nous considérons une famille de fonctions de récompense légèrement plus générale que dans le corps principal de l'article. Comme
+ci-dessus, nous supposons que les prédicteurs produisent une réponse y, une confiance q ∈[0, 1] ; nous supposons maintenant que
+les scores dépendent en outre d’un signal d’exactitude binaire arbitraire c, distribué selon certains
+py := p(c = 1 | y).
+Nous considérons toutes les fonctions de récompense de la forme :
+R(c, q) = λc −S(q, c)
+où S(q, c) est une règle de notation et λ > 0 est une récompense scalaire pour avoir produit la bonne réponse.
+Nous définissons la récompense attendue du choix d’une confiance q pour une réponse y donnée comme suit :
+V (y, q) = Ec R(c, q) = λpy −[pyS(q, 1) + (1 −py)S(q, 0)] .
+Lemme 1 (Incitatif au calibrage). Pour toute réponse y, la récompense attendue V (y, q) est maximisée à
+q = py si et seulement si S(q, c) est une règle de notation appropriée.
+Preuve. Le terme d’exactitude λpy dans la fonction de récompense ne dépend pas de q, donc
+argument maximum
+q
+V (y, q) = argument max
+q
+−pyS(q, 1) + (1 −py)S(q, 0) = argument min
+q
+Ec S(q, c) .
+Mais une règle de notation est propre par définition si Ec∼Bernoulli(py) S(q, c) est minimisé par q = py, donc le
+l’énoncé du lemme suit immédiatement.
+Lemme 2 (Incitatif à l’exactitude). Considérons y, y′ avec les probabilités de succès associées py ≥py′.
+Alors V (y, py) ≥V (y′, py′) si et seulement si
+S(p, 1) −S(p, 0) ≤λ
+pour tout p ∈[0, 1] .
+Preuve. Tout d’abord, définissez :
+W(p) = λp −pS(p, 1) + (1 −p)S(p, 0) ,
+Notez que V (y, py) = W(py) et W(p) représente la récompense maximale atteignable pour tout y avec
+probabilité de succès associée yp. Ainsi, pour vérifier l’énoncé du lemme, il suffit de montrer
+que W(p) ≥W(p′) si et seulement si p ≥p′, ce qui équivaut à montrer que W(p) est
+non décroissant à la p.
+On calcule d’abord la dérivée de W :
+W ′(p) = λ −S(p, 1) + S(p, 0) −pS′(p, 1) −(1 −p)S′(p, 0) .
+D’après la représentation de Savage-Dawid (Gneiting & Raftery, 2007) des règles de notation appropriées, il existe
+existe une fonction de poids non négative ω(t) ≥0 telle que :
+S′(p, 1) = −(1 −p) · ω(p) ,
+S′(p, 0) = p · ω(p) .
+En remplaçant ceci dans :
+W ′(p) = λ −S(p, 1) + S(p, 0) + p · (1 −p) · ω(p) −(1 −p) · p · ω(p)
+= S(p, 1) −S(p, 0) .
+Ainsi la dérivée de W est non négative (W est non décroissante) si et seulement si S(p, 1) −S(p, 0) ≤λ
+pour p ∈[0, 1].
+Alors l’énoncé du théorème principal de la section 3 découle immédiatement de ces deux lemmes :
+Preuve du théorème 1. Notons d’abord que RRLCR satisfait les conditions du lemme 2 avec λ = 1 et
+S(q, 1y≡y∗) = (q −1y≡y∗)2, on a maxp S(p, 1) −S(p, 0) = 1. Alors condition 1 (calibrage)
+découle du lemme 1 et du fait que le score du Brier est une règle de notation appropriée, et de la condition 2
+(exactitude) découle du lemme 2 et du caractère limité de S(p, 1) −S(p, 0).
+Corollaire 1. Soit S(q, c) une règle de notation strictement propre.
+16
+
+===== Page 17 =====
+
+1. Si S(p, 1) −S(p, 0) est borné, alors il existe un λ > 0 fini tel que la fonction de récompense
+R(c, q) = λc −S(q, c) satisfait la condition d'exactitude :
+S(p, 1) −S(p, 0) ≤λ
+pour tout p ∈[0, 1]
+et encourage ainsi conjointement l’étalonnage et l’exactitude.
+2. Si S(p, 1) −S(p, 0) est illimité, alors pour tout λ > 0 fini, il peut exister un y ≥y′
+tel que W(py) < W(py′), et RRLCR préfère (y′, py′) à (y, py).
+Exemples. Le score de Brier est borné : S(p, 1) = (1 −p)2, S(p, 0) = p2, donc :
+S(p, 1) −S(p, 0) = 1 −2p ≤1
+pour tout p ∈[0, 1]
+Ainsi, la condition est vraie pour λ = 1.
+En revanche, le score logarithmique est illimité :
+S(p, 1) = −log p,
+S(p, 0) = −log(1−p),
+S(p, 1)−S(p, 0) = journal
+1 −p
+p
+
+→∞
+comme p →0
+Aucun λ fini ne peut donc satisfaire la condition.
+17
+
+===== Page 18 =====
+
+B
+CONFIGURATION EXPÉRIMENTALE
+B.1
+ENSEMBLES DE DONNÉES DE FORMATION
+HotpotQA-Modified : nous utilisons une version modifiée de l'ensemble de données de distraction HotPotQA, qui contient
+questions factuelles nécessitant un raisonnement à plusieurs sauts. (Yang et coll., 2018). Chaque exemple dans ce cadre
+présente dix paragraphes, dont deux seulement contiennent les informations nécessaires pour répondre à la question ;
+les huit paragraphes restants contiennent des détails étroitement liés mais non pertinents. Par conséquent, résoudre
+cette tâche nécessite que le modèle identifie et raisonne sur les passages pertinents. Pour plus fortement
+développons une capacité de raisonnement sur l'incertitude, nous construisons un nouvel ensemble de données, HotPotQA-Modified, dans lequel
+nous supprimons systématiquement soit 0, soit 1, soit les deux, des paragraphes clés requis pour répondre à chaque question.
+Cette modification introduit différents niveaux d'exhaustivité informationnelle que le modèle doit raisonner
+fini. Nous répartissons les questions en trois groupes égaux : un tiers n'ont pas de paragraphes pertinents (0/8),
+un tiers ont 1 paragraphe pertinent (1/7) et un tiers ont les deux paragraphes pertinents (2/6). Chacun
+la question contient systématiquement 8 paragraphes au total. Notre ensemble de données de formation comprend 20 000 exemples.
+Nous mesurons l'exactitude en utilisant une correspondance exacte de chaîne.
+Big-Math Digits : nous utilisons Big-Math (Albalak et al., 2025), un vaste ensemble de données de formation organisé pour RL
+contenant plus de 250 000 problèmes mathématiques, y compris des questions de référence telles que les mathématiques et
+GSM8K. Afin de garantir une plage de difficulté appropriée, nous retenons les problèmes pour lesquels le LLaMA-8B
+le taux de résolution (fourni dans l'ensemble de données) est compris entre 0 et 70 %. Nous avons également constaté que le bruit du vérificateur peut être
+important dans les ensembles de données mathématiques et peut provoquer une instabilité de la formation. Pour réduire le bruit du vérificateur, nous
+limiter l'ensemble de données aux problèmes avec des réponses numériques, permettant une vérification automatique presque parfaite.
+Notre ensemble de formation final comprend 15 000 problèmes. Nous calculons l'exactitude à l'aide de math-verify.
+B.2
+DÉTAILS SUPPLÉMENTAIRES DE LA FORMATION
+À la suite de Turtel et al. (2025), nous supprimons la division de l’écart type dans l’avantage, ce qui
+pourrait aider à apprendre des exemples de mauvais étalonnages extrêmes. Nous utilisons le BNPO
+fonction de perte, qui regroupe les pertes au niveau des jetons en utilisant le nombre de jetons actifs dans le réseau local.
+lot de formation (Xiao et al., 2025). Nous générons 32 réponses par invite avec une température de 0,7,
+et utilisons une taille de lot effective de 2048. Pour la formation RLCR, nous utilisons l'invite système Long RLCR
+pour Hotpot et l'invite Simple RLCR pour Math (la version longue n'offrait pas d'avantage supplémentaire
+en mathématiques). Nous utilisons l'invite de génération simple pour RLVR. Toutes les invites de l’Annexe C.
+Récompense de format : nous utilisons une récompense de format pour encourager le respect du format structuré présenté.
+sur la figure 1. Dans RLVR, les modèles doivent formater leur sortie dans les balises <think> et <answer>. Dans RLCR,
+en plus des balises <think> et <answer>, nous avons besoin d'une balise <analysis> pour contenir l'incertitude
+raisonnement et une balise <confidence> pour la confiance verbalisée. Une réponse valide doit contenir tous ces éléments
+balises dans le bon ordre. Les récompenses de format et d’étalonnage sont pondérées de manière égale.
+SFT Warmup : En mathématiques, nous entraînons une variante avec une phase d'échauffement SFT légère avant RL pour obtenir
+analyses d’incertitude de meilleure qualité. Nous générons des solutions à partir du modèle de base sur 500 exemples
+et invitez Deepseek-R1 avec l'invite Expert SFT à produire des analyses d'incertitude pour eux. Nous
+puis effectuez SFT avec les <think> et <answer> obtenus à partir du modèle de base, suivis du
+<analyse> obtenue à partir de Deepseek-R1. Notez que nous ne demandons pas à Deepseek-R1 d'afficher la confiance
+scores.
+B.3
+ENSEMBLES DE DONNÉES D’ÉVALUATION
+Nous effectuons des évaluations sur un grand nombre d'ensembles de données :
+1. HotPotQA (Distractor) : Nous utilisons 1000 exemples de validation du HotpotQA original
+ensemble de données de distraction. Nous modifions légèrement l'ensemble de données et supprimons 2 paragraphes non pertinents
+de chaque question. Ainsi, chaque question comporte 8 paragraphes avec les deux paragraphes de support
+présent. Nous mesurons l'exactitude à l'aide d'une correspondance exacte (Yang et al., 2018).
+2. HotPotQA-Modified : Nous évaluons sur 500 exemples de validation retenus. Nous mesurons
+l'exactitude en utilisant la correspondance exacte.
+18
+
+===== Page 19 =====
+
+3. TriviaQA : Nous utilisons 2000 exemples de l'ensemble de validation de l'ensemble de données TriviaQA (Joshi
+et coll., 2017). Nous utilisons la répartition sans contexte pour tester uniquement l'exactitude factuelle. Nous évaluons en utilisant
+LLM-en tant que juge.
+4. SimpleQA : nous utilisons l'ensemble de données complet SimpleQA composé de 4 326 questions factuelles (Wei
+et coll., 2024). Nous évaluons en utilisant LLM-as-a-juge.
+5. Math-500 Nous utilisons le populaire ensemble de données MATH-500, qui contient un sous-ensemble de problèmes
+à partir de l’ensemble de données MATH original (Hendrycks et al., 2021). Nous évaluons en utilisant math-verify, un
+système d'évaluation d'expressions mathématiques publié par huggingface.
+6. GSM8K : Nous utilisons l'ensemble de tests (1319 problèmes) du populaire Grade School Math 8K
+ensemble de données (Cobbe et al., 2021). Nous évaluons en utilisant math-verify.
+7. Big-Math-Digits : Nous évaluons sur 1000 exemples de validation retenus. Nous évaluons en utilisant
+vérification mathématique.
+8. CommonSenseQA : Nous utilisons l'ensemble de validation (1220 problèmes) du CommonsenseQA
+ensemble de données (Talmor et al., 2019), un ensemble de données de questions à choix multiples qui nécessite
+différents types de connaissances de bon sens pour prédire les bonnes réponses. Nous évaluons
+en utilisant LLM-comme-juge.
+9. GPQA : Nous utilisons l'ensemble de données principal GPQA contenant 448 questions à choix multiples rédigées
+par des experts en biologie, physique et chimie (Rein et al., 2024). Nous évaluons en utilisant LLM-
+en tant que juge.
+B.4
+DÉTAILS DE L'ÉVALUATION
+Tous les modèles sont évalués avec une température de 0. Pour tous les ensembles de données sauf Math et GSM8K, nous utilisons un
+budget de jeton maximum de 4096. L'invite du système pour l'évaluation et le pipeline pour extraire la réponse
+et les scores de confiance varient légèrement en fonction de la méthode que nous évaluons :
+1. RLCR (le nôtre) : les modèles RLCR utilisent <think>, <answer>, <analysis> et <confidence>
+balises. Ils sont évalués avec les mêmes invites système sur lesquelles ils sont formés. Nous extrayons leur
+réponse de la balise <answer> et leur confiance à partir de la balise <confidence>.
+2. RLVR : les modèles RLVR utilisent <think> et <answer>. Il est évalué avec le même système
+» et nous extrayons leur réponse de la balise <answer>. Pour obtenir leur verbalisation
+confiance, nous ajoutons "Le temps de réflexion est terminé. Ma confiance verbalisée dans ma réponse en tant que
+un nombre compris entre 0 et 100 est égal à » à leur sortie générée.
+3. Classificateur/Sonde : les deux méthodes sont conditionnées par la question et par le modèle RLVR.
+génération (solution et réponse). Ces méthodes utilisent donc le modèle RLVR comme générateur et
+leurs précisions rapportées dans les tableaux de résultats sont égales.
+4. Base : le modèle de base n'est pas efficace pour suivre les instructions et est invité à utiliser un modèle plus simple.
+invite système (Simple Confidence Prompt) qui le guide pour utiliser <think>, <answer> et
+Balises <confidence>. Dans le cas où aucune confiance valable ne peut être extraite, nous ajoutons « Penser
+le temps est terminé. Ma confiance verbalisée dans ma réponse car un nombre compris entre 0 et 100 est égal
+à »à leur sortie et rappelez-les à nouveau pour obtenir la confiance.
+Pour toutes les méthodes, si nous ne parvenons pas à extraire une réponse valide des balises <answer>, nous ajoutons
+"Le temps de réflexion est terminé. Ma réponse finale est" à leur sortie et rappelez-les. L'objectif principal de ces
+les pipelines personnalisés doivent être capables d'extraire équitablement une réponse et un niveau de confiance et de minimiser les cas
+où un formatage incorrect affecte négativement les performances. Notez que parce qu'ils sont formés avec
+récompenses de format, les deux modèles formés par RL sont presque parfaits pour adhérer au format souhaité et
+nécessitent des interventions minimes. Cependant, le modèle de base bénéficie de ce pipeline d’extraction complet.
+Il est important de noter qu’une fois les réponses et les confidences extraites, toutes les méthodes sont évaluées de manière identique.
+et en fonction de l'ensemble de données, une correspondance exacte, un LLM en tant que juge ou une vérification mathématique sont utilisés.
+LLM-as-a-juge : nous utilisons Llama-3.1-8B-Instruct avec une température réglée sur 0 comme juge. Le juge
+est fourni avec la question, la réponse de vérité terrain et la réponse extraite de l'évaluation
+canalisation. Il est invité à répondre par « OUI » ou « NON » en fonction de l'exactitude de la réponse.
+Comme les ensembles de données que nous évaluons ont des réponses courtes et objectives, nous ne conditionnons pas le juge sur la
+des traces de pensée qui peuvent ajouter des biais.
+19
+
+===== Page 20 =====
+
+C
+INVITES SYSTÈME
+Longue invite RLCR
+"Une conversation entre l'utilisateur et l'assistant. L'utilisateur pose une question et l'assistant
+le résout. L'assistant réfléchit d'abord au processus de raisonnement dans l'esprit, fournit à l'utilisateur
+avec la réponse finale, analyse ensuite sa confiance dans la solution et fournit ensuite la
+utilisateur avec son niveau de confiance. Le niveau de confiance est un nombre compris entre 0 et 1 (inclus)
+enfermé dans les balises <confidence> </confidence>. La réponse finale est placée entre
+Balises <answer> </answer>. L'analyse sur la confiance et l'incertitude est incluse dans
+Balises <analyse> </analyse>. L'assistant doit raisonner sur sa confiance dans le
+solution et son incertitude dans la solution au sein de ces balises. Voici quelques lignes directrices pour le
+analyse : 1. Votre tâche consiste à signaler les points sur lesquels le modèle pourrait se tromper dans sa réflexion,
+ou des choses où il pourrait y avoir une ambiguïté dans les étapes de la solution ou dans le processus de raisonnement
+lui-même.
+2. Vous ne devez pas suggérer des moyens de corriger la réponse, votre travail consiste uniquement à raisonner sur
+incertitudes.
+3. Pour certaines questions, la réponse peut être correcte. Dans ces cas-là, il est également acceptable d'avoir
+seulement un petit nombre d'incertitudes, puis je dis explicitement que je suis incapable d'en repérer davantage
+incertitudes.
+4. Les incertitudes peuvent être différentes des erreurs. Par exemple, des incertitudes peuvent découler de
+ambiguïtés dans la question, ou de l'application d'un lemme/preuve particulier.
+5. S’il existe d’autres approches potentielles pouvant conduire à des réponses différentes, vous devriez
+mentionnez-les.
+6. Énumérez les incertitudes plausibles, ne faites pas de déclarations génériques, soyez aussi précis sur
+incertitudes possibles.
+7. Joignez cette analyse d'incertitude entre les balises <analysis> </analysis>.
+Le format final à suivre est :
+<pensez> au processus de raisonnement ici
+</think> <answer> réponse finale ici </analysis> <analysis> analyse sur la confiance
+et incertitude ici </analysis> <confidence> niveau de confiance ici (nombre entre 0
+et 1) </confidence> )
+Invite RLCR simple
+Une conversation entre l'utilisateur et l'assistant. L'utilisateur pose une question et l'assistance
+tant le résout. L'Assistant réfléchit d'abord au processus de raisonnement dans l'esprit,
+fournit à l'utilisateur la réponse finale, puis analyse sa confiance dans la solution et
+fournit à l'utilisateur son niveau de confiance. Le niveau de confiance est un nombre compris entre
+0 et 1 (inclus) enfermés dans les balises <confidence> </confidence>. La dernière et
+swer est placé entre les balises <answer> </answer>. L'analyse sur la confiance et
+l'incertitude est enfermée dans <analyse>
+Balises </analyse>.
+L'assistant doit
+raison sur sa confiance dans la solution et son incertitude dans la solution au sein de
+ces balises. Le format final qui doit être suivi est : <pensez> au processus de raisonnement ici
+</think><answer> réponse finale ici </answer><analysis> analyse sur la confiance et
+incertitude ici </analysis><confidence> niveau de confiance ici (nombre entre 0 et
+1) </confiance>
+20
+
+===== Page 21 =====
+
+Invite de confiance simple
+Une conversation entre l'utilisateur et l'assistant. L'utilisateur pose une question et l'Assistant
+le résout. L'assistant réfléchit d'abord au processus de raisonnement dans l'esprit et analyse son
+confiance dans la solution et fournit ensuite à l'utilisateur la réponse finale ainsi que ses
+niveau de confiance. Le niveau de confiance est un nombre compris entre 0 et 1 (inclus) entouré
+dans les balises <confidence> </confidence>. La réponse finale est placée entre <réponse>
+Balises </answer>. Le format final qui doit être suivi est : <pensez> au processus de raisonnement ici
+</think><answer> réponse finale ici </answer> <confidence> niveau de confiance ici
+(nombre entre 0 et 1) </confidence>.
+Invite RLVR
+Une conversation entre l'utilisateur et l'assistant. L'utilisateur pose une question et l'Assistant
+le résout. L'assistant réfléchit d'abord au processus de raisonnement dans l'esprit, puis fournit
+l'utilisateur avec la réponse. Le processus de raisonnement et la réponse sont inclus dans <think>
+Balises </think> et <answer> </answer>, respectivement, c'est-à-dire le processus de raisonnement <think> ici
+</think><answer> répondez ici </answer>.
+Invite SFT experte
+On vous pose une question et une solution. Vous devez vérifier si la solution est correcte et
+joignez votre raisonnement de vérification dans les balises <analysis> </analysis>. Votre analyse
+doit comporter au moins 300 caractères et doit être réfléchi de manière séquentielle
+solution étape par étape. Voici les lignes directrices pour votre analyse :
+1. Votre analyse doit également être sous la forme « I » comme si vous aviez écrit la solution et que vous étiez en train de vérifier
+ça.
+2. Votre objectif n'est pas de résoudre le problème mais plutôt de vérifier si les étapes présentées
+la solution est correcte.
+3. S'il existe des ambiguïtés dans les étapes de la solution ou si une étape introduit une incertitude, vous devez
+mentionnez-le dans l’analyse.
+4. Parcourez la solution séquentiellement, étape par étape.
+5. L'analyse doit comporter au minimum 300 caractères.
+6. Joignez cette analyse d'incertitude entre les balises <analysis> </analysis>.
+21
+
+===== Page 22 =====
+
+ré
+RÉSULTATS
+D.1
+MODÈLES FORMÉS SUR HOTPOTQA
+Méthode
+SimpleQA
+Anecdote
+Acc.
+AUROC
+Brier
+CEE
+Acc.
+AUROC
+Brier
+CEE
+Socle
+13,5%
+0,502
+0,773
+0,809
+57,8%
+0,510
+0,381
+0,371
+RLVR
+12,4%
+0,501
+0,875
+0,875
+62,2%
+0,502
+0,377
+0,377
+RLVR +Classificateur
+12,4%
+0,477
+0,531
+0,638
+62,2%
+0,567
+0,256
+0,151
+RLVR + Brier-Classificateur
+12,4%
+0,598
+0,112
+0,058
+62,2%
+0,568
+0,370
+0,371
+RLVR + Sonde
+12,4%
+0,506
+0,141
+0,124
+62,2%
+0,472
+0,430
+0,410
+Répondre au problème
+12,4%
+0,418
+0,832
+0,847
+62,2%
+0,504
+0,366
+0,361
+RLCR (le nôtre)
+12,1%
+0,598
+0,241
+0,337
+60,8%
+0,731
+0,202
+0,058
+Tableau 2 : Performances sur les ensembles de données SimpleQA et Trivia. Meilleures valeurs en gras.
+Méthode
+Bon sensQA
+GPQA
+Acc.
+AUROC
+Brier
+CEE
+Acc.
+AUROC
+Brier
+CEE
+Socle
+88,9%
+0,623
+0,099
+0,004
+39,5%
+0,492
+0,504
+0,509
+RLVR
+90,8%
+0,500
+0,092
+0,092
+39,5%
+0,500
+0,605
+0,605
+RLVR +Classificateur
+90,8%
+0,635
+0,119
+0,183
+39,5%
+0,523
+0,279
+0,161
+RLVR + Brier-Classificateur
+90,8%
+0,645
+0,261
+0,418
+39,5%
+0,523
+0,288
+0,212
+RLVR + Sonde
+90,8%
+0,499
+0,748
+0,812
+39,5%
+0,503
+0,329
+0,292
+Répondre au problème
+90,8%
+0,603
+0,083
+0,031
+39,5%
+0,526
+0,537
+0,544
+RLCR (le nôtre)
+91,3%
+0,728
+0,167
+0,302
+41,5%
+0,550
+0,267
+0,155
+Tableau 3 : Performances sur CommonsenseQA et GPQA. Meilleures valeurs en gras.
+Méthode
+MATH-500
+GSM8K
+Acc.
+AUROC
+Brier
+CEE
+Acc.
+AUROC
+Brier
+CEE
+Socle
+46,8%
+0,591
+0,485
+0,492
+73,5%
+0,524
+0,240
+0,215
+RLVR
+38,6%
+0,502
+0,610
+0,611
+80,1%
+0,504
+0,198
+0,198
+RLVR +Classificateur
+38,6%
+0,704
+0,260
+0,224
+80,1%
+0,572
+0,162
+0,067
+RLVR + Brier-Classificateur
+38,6%
+0,580
+0,319
+0,291
+80,1%
+0,659
+0,548
+0,629
+RLVR + Sonde
+38,6%
+0,671
+0,241
+0,152
+80,1%
+0,532
+0,413
+0,479
+Répondre au problème
+38,6%
+0,786
+0,510
+0,547
+80,1%
+0,775
+0,163
+0,169
+RLCR (le nôtre)
+45,4%
+0,716
+0,251
+0,188
+86,3%
+0,740
+0,142
+0,197
+Tableau 4 : Performances sur Math-500 et GSM8K. Meilleures valeurs en gras.
+22
+
+===== Page 23 =====
+
+Méthode
+HotpotQA
+HotpotQA-Modifié
+Acc.
+AUROC
+Brier
+CEE
+Acc.
+AUROC
+Brier
+CEE
+Socle
+39,7%
+0,540
+0,525
+0,535
+30,4%
+0,591
+0,566
+0,588
+RLVR
+63,0%
+0,500
+0,370
+0,370
+46,0%
+0,500
+0,540
+0,540
+RLVR +Classificateur
+63,0%
+0,664
+0,217
+0,070
+46,0%
+0,772
+0,209
+0,126
+RLVR + Brier-Classificateur
+63,0%
+0,653
+0,223
+0,091
+46,0%
+0,791
+0,201
+0,117
+RLVR + Sonde
+63,0%
+0,553
+0,243
+0,096
+46,0%
+0,571
+0,263
+0,122
+Répondre au problème
+63,0%
+0,715
+0,357
+0,360
+46,0%
+0,609
+0,525
+0,529
+RLCR (le nôtre)
+62,1%
+0,687
+0,210
+0,030
+44,4%
+0,798
+0,188
+0,078
+Tableau 5 : Performances sur HotpotQA et HotpotQA-Modified. Meilleures valeurs en gras.
+D.2
+MODÈLES FORMÉS AUX MATHÉMATIQUES
+Méthode
+SimpleQA
+Anecdote
+Acc.
+AUROC
+Brier
+CEE
+Acc.
+AUROC
+Brier
+CEE
+Socle
+13,5%
+0,502
+0,773
+0,809
+57,8%
+0,510
+0,381
+0,371
+RLVR
+15,2%
+0,528
+0,828
+0,840
+58,3%
+0,503
+0,430
+0,427
+RLVR +Classificateur
+15,2%
+0,446
+0,567
+0,641
+58,3%
+0,574
+0,291
+0,223
+RLVR + Brier-Classificateur
+15,2%
+0,494
+0,154
+0,108
+58,3%
+0,608
+0,301
+0,253
+RLVR + Sonde
+15,2%
+0,440
+0,582
+0,657
+58,3%
+0,560
+0,296
+0,229
+Répondre au problème
+15,2%
+0,450
+0,799
+0,810
+58,3%
+0,480
+0,398
+0,384
+RLCR (le nôtre)
+12,1%
+0,518
+0,426
+0,536
+61,0%
+0,673
+0,218
+0,098
+SFT+ RLCR (le nôtre)
+11,4%
+0,595
+0,290
+0,397
+55,5%
+0,719
+0,212
+0,058
+Tableau 6 : Performances sur les ensembles de données SimpleQA et Trivia. Meilleures valeurs en gras.
+Méthode
+Bon sensQA
+GPQA
+Acc.
+AUROC
+Brier
+CEE
+Acc.
+AUROC
+Brier
+CEE
+Socle
+88,6%
+0,620
+0,099
+0,004
+39,5%
+0,492
+0,504
+0,509
+RLVR
+89,3%
+0,547
+0,131
+0,126
+50,0%
+0,496
+0,531
+0,531
+RLVR +Classificateur
+89,3%
+0,614
+0,226
+0,343
+50,0%
+0,514
+0,327
+0,268
+RLVR + Brier-Classificateur
+89,3%
+0,599
+0,302
+0,447
+50,0%
+0,533
+0,334
+0,279
+RLVR + Sonde
+89,3%
+0,571
+0,187
+0,280
+50,0%
+0,496
+0,302
+0,192
+Répondre au problème
+89,3%
+0,556
+0,104
+0,094
+50,0%
+0,532
+0,441
+0,398
+RLCR (le nôtre)
+90,1%
+0,619
+0,213
+0,340
+43,3%
+0,568
+0,260
+0,102
+SFT+RLCR (le nôtre)
+77,6%
+0,726
+0,217
+0,251
+32,6%
+0,602
+0,226
+0,080
+Tableau 7 : Performances sur les ensembles de données CommonsenseQA et GPQA. Meilleures valeurs en gras.
+23
+
+===== Page 24 =====
+
+Méthode
+MATH-500
+GSM8K
+Acc.
+AUROC
+Brier
+CEE
+Acc.
+AUROC
+Brier
+CEE
+Socle
+46,8%
+0,591
+0,485
+0,492
+73,5%
+0,524
+0,240
+0,215
+RLVR
+59,2%
+0,451
+0,438
+0,427
+90,6%
+0,465
+0,094
+0,048
+RLVR +Classificateur
+59,2%
+0,771
+0,220
+0,177
+90,6%
+0,768
+0,077
+0,057
+RLVR + Brier-Classificateur
+59,2%
+0,788
+0,215
+0,184
+90,6%
+0,757
+0,076
+0,052
+RLVR + Sonde
+59,2%
+0,670
+0,259
+0,198
+90,6%
+0,560
+0,109
+0,135
+Répondre au problème
+59,2%
+0,544
+0,392
+0,395
+90,6%
+0,479
+0,091
+0,088
+RLCR (le nôtre)
+59,8%
+0,665
+0,227
+0,120
+89,6%
+0,632
+0,100
+0,119
+SFT+RLCR (le nôtre)
+55,8%
+0,806
+0,194
+0,156
+90,4%
+0,731
+0,076
+0,058
+Tableau 8 : Performances sur Math-500 et GSM8K. Meilleures valeurs en gras.
+Méthode
+Chiffres mathématiques
+HotpotQA
+Acc.
+AUROC
+Brier
+CEE
+Acc.
+AUROC
+Brier
+CEE
+Socle
+48,1%
+0,560
+0,466
+0,469
+39,7%
+0,540
+0,525
+0,535
+RLVR
+68,8%
+0,502
+0,319
+0,300
+49,7%
+0,505
+0,547
+0,547
+RLVR +Classificateur
+68,8%
+0,810
+0,164
+0,052
+49,7%
+0,584
+0,283
+0,196
+RLVR + Brier-Classificateur
+68,8%
+0,794
+0,167
+0,053
+49,7%
+0,597
+0,302
+0,243
+RLVR + Sonde
+68,8%
+0,722
+0,191
+0,066
+49,7%
+0,580
+0,276
+0,164
+Répondre au problème
+68,8%
+0,533
+0,297
+0,298
+49,7%
+0,599
+0,469
+0,475
+RLCR (le nôtre)
+68,7%
+0,726
+0,181
+0,050
+48,3%
+0,615
+0,272
+0,177
+SFT+RLCR (le nôtre)
+70,5%
+0,792
+0,154
+0,029
+41,6%
+0,650
+0,241
+0,093
+Tableau 9 : Performances sur les chiffres Big-Math et HotpotQA. Meilleures valeurs en gras.
+24
+
+===== Page 25 =====
+
+EXEMPLE SIMPLEQA
+Question
+Qui a reçu le prix Jerlov de la Société d’océanographie en 2018 ? (Réponse de la vérité terrain :
+Annick Bricaud)
+RLCR (le nôtre)
+<penser> La question demande qui a reçu le prix Jerlov de la Société d'océanographie en 2018.
+Le prix Jerlov est décerné par la Société d'océanographie et porte le nom du regretté professeur Gunnar.
+Jerlov, pionnier dans le domaine de l'optique océanique. Pour trouver le gagnant du prix 2018, il me faudrait
+recherchez les informations les plus récentes sur le site Web de la Société d’océanographie ou d’autres sources fiables.
+</penser>
+<réponse> Dr David W. Schiedek </réponse>
+<analyse> Le site Web de la Société d'Océanographie ou d'autres sources fiables ne fournissent pas d'informations
+sur le lauréat du prix Jerlov 2018. Il est possible que l'information ne soit pas facilement disponible
+ou que le prix n'a pas été décerné en 2018. De plus, le nom « Dr David W. Schiedek » n'est pas un
+figure bien connue dans le domaine de l'océanographie, ce qui soulève des incertitudes quant à l'exactitude de cette information.
+réponse. </analyse>
+<confiance> 0,25 </confiance>
+RLVR
+<penser> La question concerne la personne qui a reçu le prix Jerlov de la Société d'océanographie.
+en 2018. Le prix Jerlov est décerné par la Société d'océanographie pour reconnaître des contributions exceptionnelles
+au domaine de l'océanographie. Le récipiendaire pour 2018 était le Dr Laurence C. Smith. </penser>
+<réponse> Laurence C. Smith </réponse>
+<confiance> 100. </confiance>
+Qwen-7B-Base
+<penser> Pour savoir qui a reçu le prix Jerlov de la Société d'océanographie en 2018, je vais chercher
+pour les informations les plus récentes sur les lauréats sur le site officiel de la Oceanography Society
+ou une source fiable qui couvre les récompenses scientifiques. </penser>
+<réponse> Le prix Jerlov de la Société d'océanographie en 2018 a été décerné au Dr.
+Lisa Levin.
+</réponse>
+<confiance> 0,95 </confiance>
+25
+
+===== Page 26 =====
+
+EXEMPLE MODIFIÉ PAR HOTPOTQA
+Toutes les informations complémentaires de la question donnée ont été supprimées. La seule façon de répondre
+correctement si le modèle mémorise les informations contenues dans ses poids.
+Question et informations complémentaires
+Question : Jacques Sernas, acteur dans Fugitif à Trieste, était de quelle nationalité ? (Masse
+Vérité Réponse : Français d'origine lituanienne)
+Votre réponse sera vérifiée avec le score de correspondance exact. Pour garantir une vérification correcte, seulement
+fournissez la réponse dans les balises <answer> </answer>. Ne mettez aucune phrase ou
+processus de raisonnement au sein des balises <answer> </answer>.
+Informations complémentaires :
+Paragraphe 0
+Man From 1997 est un épisode de voyage dans le temps de la série télévisée d'anthologie 1956-1957 Conflict.
+réalisé par Roy del Ruth, produit par Roy Huggins, écrit par James Gunn à partir d'une histoire de
+Alfred Bester, avec Jacques Sernas, Charles Ruggles, Gloria Talbott et James Garner.
+La musique a été écrite par David Buttolph et le directeur de la photographie était Ted D. McCord.
+L'émission a été initialement diffusée le 27 novembre 1956 et un kinéscope de l'émission
+existe actuellement.
+Paragraphe 1
+Altaïr est un film dramatique romantique italien de 1956 réalisé par Leonardo De Mitri et mettant en vedette
+Franco Interlenghi, Antonella Lualdi et Jacques Sernas.
+Paragraphe 2
+Dieci canzoni d'amore da salvare (titre anglais : « Dix chansons d'amour ») est un film italien de 1953.
+réalisé par Flavio Calzavara. L'intrigue concerne un auteur-compositeur, interprété par Jacques Sernas, qui
+quitte sa chérie et son éditeur lorsqu'il apprend qu'il devient aveugle. Soutenir les Sernas
+étaient Brunella Bovo, Franca Tamantini et Enrico Viarisio.
+Paragraphe 3
+T'aimer est mon péché (italien : Amarti `e il mio peccato) est un film mélodrame italien de 1953.
+réalisé par Sergio Grieco et avec Jacques Sernas, Luisa Rossi et Elisa Cegani.
+Paragraphe 4
+It's All Adam's Fault ou In Six Easy Lessons (français : C'est la faute d'Adam) est un film français de 1958.
+comédie réalisée par Jacqueline Audry et mettant en vedette Dany Robin, Jacques Sernas et
+Mijanou Bardot.
+Paragraphe 5
+Balearic Caper (espagnol : « Zarabanda bing bing », italien : « Baleari Operazione Oro »,
+Français : « Barbouze ch´erie », également connue sous le nom d'Opération Gold) est un film hispano-italien-français de 1966.
+Film de comédie braquage-Eurospy écrit et réalisé par José María Forqu'e et avec Jacques
+Sernas, Daniela Bianchi et Mireille Darc. Il a été tourné à Ibiza.
+Paragraphe 6
+Finishing School (italien : Fanciulle di lusso) est une comédie franco-italienne de 1953 réalisée
+de Bernard Vorhaus avec Susan Stephen, Anna Maria Ferrero et Jacques Sernas. Il
+a été réalisé à Cinecitt`a avec des décors conçus par le directeur artistique Franco Lolli. Il est également connu par
+le titre alternatif de Luxury Girls.
+Paragraphe 7
+Jump into Hell est un film de guerre de 1955 réalisé par David Butler. Le film met en vedette Jacques Sernas
+(présenté comme « Jack Sernas ») et Kurt Kasznar. Le premier film de guerre hollywoodien contemporain de
+la guerre d'Indochine, l'histoire est un récit romancé de la bataille de Dien Bien Phu.
+26
+
+===== Page 27 =====
+
+RLCR
+<penser> La question demande la nationalité de Jacques Sernas, l'acteur du Fugitif à Trieste. Le
+les informations fournies mentionnent Jacques Sernas dans plusieurs films, mais ne précisent pas sa nationalité.
+Cependant, il mentionne qu'il a joué dans Altaïr, un film dramatique romantique italien de 1956, et qu'il
+a été acteur dans plusieurs films français et italiens. Cela suggère que Jacques Sernas pourrait être d'origine française
+ou de nationalité italienne, puisqu'il a joué dans des films produits dans ces pays. Cependant, il n'y a pas de direct
+des informations sur sa nationalité dans le texte donné. </penser>
+<answer> Français </answer>
+<analyse> Les informations fournies mentionnent Jacques Sernas dans plusieurs films français et italiens, et
+il a joué dans Altair, un film dramatique romantique italien de 1956. Cependant, il n'existe aucune information directe sur
+sa nationalité. S'il est possible qu'il soit de nationalité française ou italienne, l'absence de précisions
+l’information la rend incertaine. De plus, le fait qu'il ait joué dans des films français et italiens
+pourrait suggérer qu’il pourrait être de nationalité mixte ou avoir des liens avec les deux pays. En raison du
+ambiguïté et manque d’informations directes, la confiance dans cette réponse est relativement faible. </analyse>
+<confiance> 0,4 </confiance>
+RLVR
+<penser> La question demande la nationalité de Jacques Sernas, l'acteur du Fugitif à Trieste. Jacques
+Sernas était un acteur américain. </penser>
+<answer> Américain </answer>
+<confiance> 100. </confiance>
+Qwen-7B-Base
+<penser> Pour déterminer la nationalité de Jacques Sernas, j’analyserai les informations fournies dans le
+informations à l’appui.
+D'après les informations données, je constate que Jacques Sernas est apparu dans différents films de différents
+pays comme l’Italie, la France et l’Espagne. Cependant, il n'y a aucune mention spécifique de sa nationalité dans
+les informations fournies.
+Faute d’informations directes sur la nationalité de Jacques Sernas, j’analyserai le contexte de
+la question. La question porte sur la nationalité de Jacques Sernas dans le cadre du film « Fugitif en
+Trieste. Trieste est une ville d'Italie et le film est un drame romantique italien.
+Dans ce contexte, il est raisonnable de supposer que Jacques Sernas est de nationalité italienne. Cependant,
+sans aucune information directe, je ne peux pas être sûr à 100 % de cette hypothèse. </penser>
+<answer> italien </answer>
+<confiance> 0,8 </confiance>
+27
+
+===== Page 28 =====
+
+EXEMPLE MATHÉMATIQUE
+Un exemple où l'analyse du RLCR vanille est générique, tandis que le modèle SFT+RLCR
+produit une évaluation beaucoup plus spécifique qui fait directement référence au processus de raisonnement. Bien que
+le modèle RLCR réalise un calibrage raisonnable en mathématiques, le modèle SFT+RLCR le surpasse,
+probablement parce qu’il a appris à générer un raisonnement en chaîne de pensée plus efficace, tenant compte de l’incertitude.
+Question
+Dalton, Hunter, Alex, Bella et Chris ont formé un fan club de super-héros. Ils se sont fixé un objectif
+regardez autant de films de super-héros que possible en un été. Dalton a regardé 15 films,
+Hunter en a regardé 19, Alex en a regardé 25, Bella en a regardé 21 et Chris en a regardé 11. Ils ont tous regardé
+ont regardé 5 films de super-héros ensemble, tandis que Dalton, Hunter et Alex en ont regardé un supplémentaire.
+3 films uniquement entre eux, et Bella et Chris ont regardé 2 autres films uniquement avec
+les uns les autres. Tous les autres films qu’ils regardaient étaient différents. Combien de films différents ont fait
+ils voient ? (Réponse de vérité terrain : 63)
+RLCR (le nôtre)
+<penser> Pour déterminer le nombre total de films différents regardés par Dalton, Hunter, Alex, Bella,
+et Chris, nous devons tenir compte des films qu'ils ont regardés ensemble et des films supplémentaires qu'ils ont regardés ensemble.
+regardés entre eux ou entre eux.
+Tout d’abord, calculons le nombre total de films regardés sans tenir compte des chevauchements : - Dalton
+regardé 15 films. - Hunter a regardé 19 films. - Alex a regardé 25 films. - Bella a regardé 21 films.
+- Chris a regardé 11 films.
+La somme de ceux-ci est :
+15 + 19 + 25 + 21 + 11 = 91
+Ensuite, nous devons soustraire les chevauchements. Ils ont tous regardé 5 films ensemble, nous soustrayons donc 4 chevauchements
+(puisque les 5 films comptent 5 fois dans la somme initiale) :
+91 −4 × 5 = 91 −20 = 71
+Il faut désormais prendre en compte les films supplémentaires regardés parmi des groupes spécifiques : - Dalton, Hunter,
+et Alex ont regardé 3 films supplémentaires uniquement entre eux. Ces films sont déjà soustraits
+à l’étape précédente, nous n’avons donc pas besoin de les soustraire à nouveau. - Bella et Chris en ont regardé 2 supplémentaires
+films uniquement entre eux. Ces films sont également déjà soustraits à l'étape précédente, nous ne le faisons donc pas
+il faut les soustraire à nouveau.
+Puisque tous les chevauchements ont été pris en compte, le nombre total de films différents qu’ils ont vus est de 71.
+<réponse> 71 </réponse>
+<analyse> La solution proposée implique une approche raisonnable pour tenir compte des chevauchements dans les
+nombre de films regardés. Cependant, il existe une incertitude dans l'interprétation de l'énoncé du problème,
+en particulier la partie sur "Tous les autres films qu'ils regardaient étaient différents".
+Cette phrase pourrait être interprétée de deux manières : 1. Que les 5 films regardés ensemble, les 3 supplémentaires
+films regardés par Dalton, Hunter et Alex, et les 2 films supplémentaires regardés par Bella et Chris
+sont tous distincts les uns des autres et des autres films regardés par les individus. 2. Que le total
+Le nombre de films regardés par chaque individu, moins les chevauchements, donne lieu à un ensemble de films distincts.
+Compte tenu des informations fournies, la première interprétation semble plus plausible, mais elle introduit une
+élément d’incertitude. Le problème n'indique pas clairement que tous les films regardés sont distincts, seulement
+que "Tous les autres films qu'ils regardaient étaient différents", ce qui pourrait être interprété comme un sous-ensemble du total
+films regardés.
+Par conséquent, le niveau de confiance dans la solution est fixé à 0,6, reconnaissant le potentiel de mauvaise interprétation.
+tation et le manque d'informations claires dans l'énoncé du problème.</analysis>
+<confiance> 0,6 </confiance>
+28
+
+===== Page 29 =====
+
+SFT+RLCR (le nôtre)
+<penser> Pour déterminer le nombre total de films différents que les membres du Fan Club des Super-Héros ont regardés,
+nous devons prendre en compte les films regardés individuellement et en groupe, en veillant à ne pas les compter deux fois
+tous les films.
+Tout d’abord, additionnons le nombre total de films regardés par chaque membre sans tenir compte des chevauchements : -
+Dalton a regardé 15 films. - Hunter a regardé 19 films. - Alex a regardé 25 films. - Bella a regardé le 21
+des films. - Chris a regardé 11 films.
+L'ajout de ceux-ci donne :
+15 + 19 + 25 + 21 + 11 = 91
+Ensuite, nous devons soustraire les chevauchements. Ils ont tous regardé 5 films ensemble, donc on soustrait 4 fois 5
+(puisque les 5 films comptent 5 fois dans la somme initiale, une fois pour chaque personne) :
+91 −4 × 5 = 91 −20 = 71
+Désormais, nous devons tenir compte des films supplémentaires regardés en petits groupes. Dalton, Hunter et
+Alex a regardé 3 autres films uniquement entre eux. Ces 3 films sont déjà inclus dans le
+décomptes initiaux pour Dalton, Hunter et Alex, mais nous devons nous assurer qu'ils ne sont pas comptés deux fois dans le
+groupe tous ensemble. Puisque les 3 films ne sont que parmi ces trois, ils ne font pas partie des 5 films
+regardés ensemble, nous n’avons donc pas besoin de les soustraire à nouveau. Ils sont déjà inclus dans l'individu
+compte et le groupe de 5, on les rajoute donc au total après la soustraction initiale :
+71 + 3 = 74
+Bella et Chris ont regardé deux autres films uniquement ensemble. Ces 2 films sont déjà inclus
+dans les décomptes initiaux pour Bella et Chris, mais nous devons nous assurer qu'ils ne sont pas comptés deux fois. Depuis
+les 2 films sont uniquement entre Bella et Chris, ils ne font pas partie des 5 films regardés ensemble ou
+les 3 films regardés par Dalton, Hunter et Alex, nous les rajoutons donc au total après le premier
+soustraction :
+74 + 2 = 76
+À ce stade, nous avons pris en compte tous les chevauchements et le nombre total de films différents qu'ils
+vu vaut 76. Pour vérifier, considérons la structure du problème : - Les 5 films regardés ensemble sont
+compté 5 fois au départ mais soustrait 4 fois, donc ils sont corrects. - Les 3 films regardés par Dalton,
+Hunter et Alex sont inclus dans leurs décomptes individuels et dans le groupe de 5, ils ont donc raison. - Le 2
+les films regardés par Bella et Chris sont inclus dans leurs décomptes individuels, ils sont donc corrects.
+Le décompte final de 76 films différents est cohérent avec les contraintes du problème. Par conséquent, le total
+le nombre de films différents qu'ils ont vu est de 76. </think>
+<réponse> 76 </réponse>
+<analyse> En examinant la solution, je remarque que le processus de raisonnement implique la somme des
+nombre total de films regardés individuellement, en soustrayant les chevauchements, puis en rajoutant ceux spécifiques au groupe
+des films. La somme initiale de 91 est correcte, et la soustraction de 20 pour les 5 films regardés ensemble est
+approprié, ce qui donne 71. Cependant, l'ajout des 3 films regardés par Dalton, Hunter et
+Alex (3) et les 2 films regardés par Bella et Chris (2) posent problème. Ces films sont déjà
+inclus dans les comptes individuels et le groupe de 5, donc les rajouter est redondant et inutile.
+Le raisonnement n'explique pas clairement pourquoi ces films sont rajoutés, et le total final de 76 l'explique.
+ne semble pas découler d’un flux logique clair, étape par étape. L'explication sur les 3 films
+être « seulement parmi ces trois » et ne pas faire partie des 5 est déroutant, car les 3 films font partie du
+les comptes individuels et le groupe de 5, ils ne doivent donc pas être rajoutés. Les 2 films regardés par
+Bella et Chris sont également problématiques, car ils ne sont qu'entre Bella et Chris, mais le raisonnement le fait.
+ne précise pas clairement comment ils sont rajoutés sans double comptage. La réponse finale de 76 n'est pas
+étayé par le raisonnement, et les étapes sont alambiquées, ce qui rend la solution peu claire et potentiellement
+incorrect.</analyse>
+<confiance> 0,3 </confiance>
+29
+
+===== Page 30 =====
+
+RLVR
+<penser> Pour déterminer le nombre total de films différents regardés par Dalton, Hunter, Alex, Bella,
+et Chris, nous devons soigneusement tenir compte des films qu'ils ont regardés ensemble et des films qu'ils ont regardés ensemble.
+regardés exclusivement entre eux et entre eux.
+1. **Total des films regardés par chaque individu :** - Dalton : 15 films - Hunter : 19 films - Alex : 25
+films - Bella : 21 films - Chris : 11 films
+2. **Films regardés ensemble :** Ils ont tous regardé 5 films ensemble.
+3. **Films regardés exclusivement entre eux :** - Dalton, Hunter et Alex ont regardé un
+3 films supplémentaires seulement entre eux. - Bella et Chris ont regardé 2 films supplémentaires seulement avec chacun
+autre.
+4. **Calcul du nombre total de films regardés :** - Tout d'abord, additionnez le nombre total de films regardés par chacun.
+individuel :
+15 + 19 + 25 + 21 + 11 = 91
+- Soustrayez les films regardés ensemble (puisqu'ils sont comptés plusieurs fois dans les totaux individuels) :
+91 −5 = 86
+- Additionnez les films regardés ensemble (ils ne doivent être comptés qu'une seule fois) :
+86 + 5 = 91
+- Soustraire les films regardés exclusivement entre eux et entre eux (puisqu'ils sont aussi
+compté plusieurs fois) : - Dalton, Hunter et Alex qui regardent 3 films seulement entre eux sont
+déjà soustrait lorsque nous avons soustrait les 5 films regardés ensemble. - Bella et Chris regardent 2
+les films uniquement entre eux sont déjà soustraits lorsque nous avons soustrait les 5 films regardés ensemble.
+- Par conséquent, nous n'avons pas besoin de procéder à d'autres ajustements pour ces films exclusifs tels qu'ils sont.
+déjà pris en compte dans la somme et la soustraction initiales.
+5. **Calcul final :** Le nombre total de films différents qu'ils ont vus est la somme de tous les films individuels.
+films regardés, moins les films regardés ensemble (pour éviter les doubles comptages), plus les films
+regardés à nouveau ensemble (pour les inclure une fois), et aucun autre ajustement n'est nécessaire pour l'exclusivité
+films :
+91 −5 + 5 = 91
+Ainsi, le nombre total de films différents qu’ils ont vu est :
+91
+</penser>
+<réponse> 91 </réponse>
+<confiance> 90 </confiance>
+30

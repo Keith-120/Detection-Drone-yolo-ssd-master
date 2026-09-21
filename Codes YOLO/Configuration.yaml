@@ -1,0 +1,9 @@
+path: C:\Users\Hp\Desktop\Nouveau dossier\Forest\
+train: train/images
+val:  valid/images
+test: test/images
+
+
+# classes
+nc: 2
+names: ['No_Flame', 'Flame']

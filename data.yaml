@@ -1,0 +1,13 @@
+train: ../train/images
+val: ../valid/images
+test: ../test/images
+
+nc: 2
+names: ['Flame', 'No_Flame']
+
+roboflow:
+  workspace: robotique-bdlrm
+  project: forest-fire-detector-2-cmeye
+  version: 4
+  license: CC BY 4.0
+  url: https://universe.roboflow.com/robotique-bdlrm/forest-fire-detector-2-cmeye/dataset/4
